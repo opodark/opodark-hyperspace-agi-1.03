@@ -195,6 +195,7 @@ services:
       - "8084:8084"
     environment:
       WORKER_ID: worker-1
+      WORKER_HOSTNAME: worker        # Docker service name — usato come host nel register
       WORKER_PORT: "8084"
       AUTHORITY_URL: ${AUTHORITY_URL:-http://authority:8080}
       OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}

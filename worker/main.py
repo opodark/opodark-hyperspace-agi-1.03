@@ -9,12 +9,13 @@ import uuid
 app = FastAPI()
 
 # -------- CONFIG --------
-WORKER_ID       = os.getenv("WORKER_ID", f"worker-{uuid.uuid4().hex[:6]}")
-WORKER_PORT     = int(os.getenv("WORKER_PORT", 8084))
-AUTHORITY_URL   = os.getenv("AUTHORITY_URL", "http://authority:8080")
-OLLAMA_URL      = os.getenv("OLLAMA_URL", "http://ollama:11434")
-DEFAULT_MODEL   = os.getenv("OLLAMA_MODEL", "phi3")
-HEARTBEAT_EVERY = int(os.getenv("HEARTBEAT_EVERY", 30))
+WORKER_ID        = os.getenv("WORKER_ID", f"worker-{uuid.uuid4().hex[:6]}")
+WORKER_HOSTNAME  = os.getenv("WORKER_HOSTNAME", WORKER_ID)  # Docker service name per DNS
+WORKER_PORT      = int(os.getenv("WORKER_PORT", 8084))
+AUTHORITY_URL    = os.getenv("AUTHORITY_URL", "http://authority:8080")
+OLLAMA_URL       = os.getenv("OLLAMA_URL", "http://ollama:11434")
+DEFAULT_MODEL    = os.getenv("OLLAMA_MODEL", "phi3")
+HEARTBEAT_EVERY  = int(os.getenv("HEARTBEAT_EVERY", 30))
 
 _registered = False
 
@@ -50,27 +51,28 @@ async def ollama_health() -> dict:
 
 def register_on_authority():
     global _registered
-    for attempt in range(10):
+    for attempt in range(20):
         try:
             import requests as req_lib
             r = req_lib.post(
                 f"{AUTHORITY_URL}/register",
                 json={
-                    "node_id": WORKER_ID,
-                    "host":    WORKER_ID,
-                    "port":    WORKER_PORT,
+                    "node_id":      WORKER_ID,
+                    "host":         WORKER_HOSTNAME,  # hostname Docker-resolvable (service name)
+                    "port":         WORKER_PORT,
                     "capabilities": ["ollama", "execute"],
                 },
                 timeout=5,
             )
             if r.status_code == 200:
-                print(f"[WORKER:{WORKER_ID}] registered on authority")
+                print(f"[WORKER:{WORKER_ID}] registered on authority (host={WORKER_HOSTNAME})")
                 _registered = True
                 return
         except Exception as e:
             print(f"[WORKER:{WORKER_ID}] register attempt {attempt+1} failed: {e}")
-        time.sleep(3 + attempt * 2)
-    print(f"[WORKER:{WORKER_ID}] could not register after 10 attempts")
+        sleep_time = min(3 + attempt * 2, 30)
+        time.sleep(sleep_time)
+    print(f"[WORKER:{WORKER_ID}] could not register after 20 attempts")
 
 
 def heartbeat_loop():
@@ -121,12 +123,13 @@ async def execute_task(task: dict):
 @app.get("/status")
 def status():
     return {
-        "worker_id":   WORKER_ID,
-        "running":     True,
-        "registered":  _registered,
-        "authority":   AUTHORITY_URL,
-        "ollama_url":  OLLAMA_URL,
-        "default_model": DEFAULT_MODEL,
+        "worker_id":      WORKER_ID,
+        "worker_hostname": WORKER_HOSTNAME,
+        "running":        True,
+        "registered":     _registered,
+        "authority":      AUTHORITY_URL,
+        "ollama_url":     OLLAMA_URL,
+        "default_model":  DEFAULT_MODEL,
     }
 
 
