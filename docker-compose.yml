@@ -1,5 +1,11 @@
 version: '3.8'
 
+# ============================================================
+# HyperSpace AGI v1.01 — docker-compose
+# Ollama: auto-detect NVIDIA GPU, AMD ROCm, Intel Arc/iGPU,
+#         Vulkan, NPU (via env flag) — CPU fallback always on
+# ============================================================
+
 services:
 
   # --------------------
@@ -12,10 +18,21 @@ services:
       - "4222:4222"
     networks:
       - hyperspace
+    restart: unless-stopped
 
   # --------------------
   # OLLAMA — LLM locale
+  # Accelerazione: usa il profilo che corrisponde al tuo HW.
+  # Default (nessun profilo): CPU only.
+  # Avvio con GPU:
+  #   NVIDIA  → docker compose --profile nvidia up
+  #   AMD     → docker compose --profile amd up
+  #   Intel   → docker compose --profile intel up
+  #   Vulkan  → docker compose --profile vulkan up
+  # Puoi cumulare: --profile nvidia --profile vulkan
   # --------------------
+
+  # CPU fallback — sempre attivo (nessun profilo richiesto)
   ollama:
     image: ollama/ollama:latest
     container_name: hyperspace_ollama
@@ -23,17 +40,102 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
+    environment:
+      # Forza CPU threads (0 = auto)
+      OLLAMA_NUM_THREADS: "0"
     restart: unless-stopped
     networks:
       - hyperspace
-    # Per GPU Nvidia: decommentare le righe seguenti
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+
+  # NVIDIA GPU (richiede nvidia-container-toolkit)
+  ollama-nvidia:
+    image: ollama/ollama:latest
+    container_name: hyperspace_ollama_nvidia
+    profiles: ["nvidia"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      OLLAMA_NUM_GPU: "999"          # usa tutte le GPU NVIDIA disponibili
+      NVIDIA_VISIBLE_DEVICES: "all"
+      NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+    networks:
+      - hyperspace
+
+  # AMD GPU — ROCm (richiede driver ROCm installati sull'host)
+  ollama-amd:
+    image: ollama/ollama:rocm
+    container_name: hyperspace_ollama_amd
+    profiles: ["amd"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render
+    environment:
+      HSA_OVERRIDE_GFX_VERSION: "11.0.0"   # modifica per la tua GPU AMD (es. 10.3.0 per RX 6000)
+      OLLAMA_NUM_GPU: "999"
+    restart: unless-stopped
+    networks:
+      - hyperspace
+
+  # Intel Arc / iGPU — via OpenCL / oneAPI (richiede intel-opencl-icd sull'host)
+  ollama-intel:
+    image: ollama/ollama:latest
+    container_name: hyperspace_ollama_intel
+    profiles: ["intel"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - render
+      - video
+    environment:
+      OLLAMA_NUM_GPU: "999"
+      # Intel Arc SYCL/oneAPI acceleration
+      ZES_ENABLE_SYSMAN: "1"
+      SYCL_CACHE_PERSISTENT: "1"
+    restart: unless-stopped
+    networks:
+      - hyperspace
+
+  # Vulkan (fallback software Vulkan o GPU con driver Vulkan)
+  ollama-vulkan:
+    image: ollama/ollama:latest
+    container_name: hyperspace_ollama_vulkan
+    profiles: ["vulkan"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - render
+      - video
+    environment:
+      OLLAMA_NUM_GPU: "999"
+      GGML_VULKAN: "1"
+    restart: unless-stopped
+    networks:
+      - hyperspace
 
   # --------------------
   # AUTHORITY
@@ -52,7 +154,7 @@ services:
     restart: unless-stopped
 
   # --------------------
-  # CONTROL PLANE
+  # CONTROL PLANE  (espone dashboard su :8085/dashboard)
   # --------------------
   control-plane:
     build:
@@ -62,10 +164,14 @@ services:
     depends_on:
       - nats
       - authority
+      - ollama
     ports:
       - "8085:8085"
     environment:
       PYTHONUNBUFFERED: "1"
+      AUTHORITY_URL: http://authority:8080
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: phi3
     networks:
       - hyperspace
     restart: unless-stopped
