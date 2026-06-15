@@ -5,6 +5,7 @@ import time
 import requests
 import json
 import uuid
+import random
 from datetime import datetime
 
 app = Flask(__name__)
@@ -39,6 +40,16 @@ AUTHORITY_URL = advanced_config["authority"]["serverUrl"]
 OLLAMA_URL    = advanced_config["ollama"]["url"]
 LOG_LIMIT = 500
 
+# heartbeat state — esposto via /hb/status
+hb_state = {
+    "cycle":        0,
+    "last_tick":    None,
+    "last_conn":    None,
+    "last_dream":   None,
+    "last_chat":    None,
+    "nodes_seen":   [],
+    "running":      False,
+}
 
 # ----------------------------
 # LOG HELPERS
@@ -48,9 +59,9 @@ LOG_TYPES = {
     "node_chat", "authority_event", "system"
 }
 
-def push_log(type_: str, summary: str, detail: str = "",
-             source: str = "control-plane", target: str = "",
-             status: str = "info", trace_id: str = ""):
+def push_log(type_, summary, detail="",
+             source="control-plane", target="",
+             status="info", trace_id=""):
     global event_logs
     entry = {
         "id":         str(uuid.uuid4()),
@@ -113,6 +124,15 @@ def clear_logs():
 
 
 # ----------------------------
+# HEARTBEAT STATUS API
+# ----------------------------
+@app.route('/hb/status', methods=['GET'])
+def hb_status():
+    safe = dict(hb_state)
+    return jsonify(safe)
+
+
+# ----------------------------
 # ADVANCED CONFIG API
 # ----------------------------
 @app.route('/config/advanced', methods=['GET'])
@@ -125,7 +145,7 @@ def get_advanced_config():
 @app.route('/config/advanced', methods=['POST'])
 def set_advanced_config():
     global advanced_config, AUTHORITY_URL, OLLAMA_URL
-    data = request.get_json(force=True, silent=True) or {}
+    data   = request.get_json(force=True, silent=True) or {}
     sec    = data.get('security', {})
     auth   = data.get('authority', {})
     mesh   = data.get('mesh', {})
@@ -139,10 +159,10 @@ def set_advanced_config():
         AUTHORITY_URL = auth['serverUrl']
     if 'enabled'  in auth: advanced_config['authority']['enabled']  = bool(auth['enabled'])
     if 'authMode' in auth: advanced_config['authority']['authMode'] = auth['authMode']
-    if 'mhtEnabled'      in mesh: advanced_config['mesh']['mhtEnabled']      = bool(mesh['mhtEnabled'])
-    if 'bootstrapPeers'  in mesh: advanced_config['mesh']['bootstrapPeers']  = mesh['bootstrapPeers']
-    if 'enabled'         in mesh: advanced_config['mesh']['enabled']          = bool(mesh['enabled'])
-    if 'url'          in ollama: advanced_config['ollama']['url']          = ollama['url'];   OLLAMA_URL = ollama['url']
+    if 'mhtEnabled'     in mesh: advanced_config['mesh']['mhtEnabled']     = bool(mesh['mhtEnabled'])
+    if 'bootstrapPeers' in mesh: advanced_config['mesh']['bootstrapPeers'] = mesh['bootstrapPeers']
+    if 'enabled'        in mesh: advanced_config['mesh']['enabled']         = bool(mesh['enabled'])
+    if 'url'          in ollama: advanced_config['ollama']['url']          = ollama['url'];  OLLAMA_URL = ollama['url']
     if 'defaultModel' in ollama: advanced_config['ollama']['defaultModel'] = ollama['defaultModel']
 
     push_log('authority_event', 'Advanced config updated', json.dumps(data, default=str), status='info')
@@ -267,6 +287,135 @@ def get_tasks():
 
 
 # ----------------------------
+# HEARTBEAT LOOP  (ogni 10s)
+# ----------------------------
+# ciclo % 3 == 0  → connection_test su tutti i nodi registrati
+# ciclo % 3 == 0  → dream  su nodo casuale
+# ciclo % 5 == 0  → node_chat tra due nodi casuali
+
+DREAM_PHRASES = [
+    "autonomous planning cycle initiated",
+    "memory consolidation phase started",
+    "sub-task decomposition in progress",
+    "latent space exploration #{}",
+    "tool-use reflection completed",
+    "goal re-prioritization triggered",
+    "associative memory update: {} new links",
+    "dream cycle #{} — context window cleared",
+]
+
+CHAT_PHRASES = [
+    ("can you handle a summarize task?", "yes, {} slots free"),
+    ("what is your current model?", "running {}"),
+    ("sync memory snapshot?", "snapshot ready — {} KB"),
+    ("queue depth?", "depth {} — capacity normal"),
+    ("ready for next task?", "ready, latency {}ms"),
+]
+
+def _get_active_nodes():
+    try:
+        res = requests.get(f"{AUTHORITY_URL}/nodes", timeout=2)
+        nodes = res.json()
+        lst = list(nodes.values()) if isinstance(nodes, dict) else nodes
+        return [n for n in lst if n.get("status") == "active"]
+    except Exception:
+        return []
+
+def heartbeat_loop():
+    global hb_state
+    time.sleep(3)
+    push_log('system', 'Control-plane v1.01 started',
+             detail='port=8085 | authority=' + advanced_config['authority']['serverUrl'],
+             status='info')
+    hb_state["running"] = True
+
+    while True:
+        cycle = hb_state["cycle"] + 1
+        hb_state["cycle"] = cycle
+        hb_state["last_tick"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+        active = _get_active_nodes()
+        hb_state["nodes_seen"] = [n.get("node_id", "?") for n in active]
+
+        # --- OGNI CICLO: connection_test su authority ---
+        try:
+            r = requests.get(f"{AUTHORITY_URL}/health", timeout=2)
+            push_log('connection_test',
+                     f'HB#{cycle} authority health OK',
+                     f'HTTP {r.status_code} | nodes_active={len(active)}',
+                     target='authority', status='success')
+            hb_state["last_conn"] = hb_state["last_tick"]
+        except Exception as e:
+            push_log('connection_test',
+                     f'HB#{cycle} authority unreachable',
+                     str(e), target='authority', status='failed')
+
+        # --- OGNI CICLO: connection_test su ogni nodo attivo ---
+        for node in active:
+            nid  = node.get("node_id", "unknown")
+            port = node.get("port", 8084)
+            tid  = str(uuid.uuid4())[:8]
+            try:
+                t0 = time.time()
+                requests.get(f"http://{nid}:{port}/status", timeout=2)
+                lat = int((time.time() - t0) * 1000)
+                push_log('connection_test',
+                         f'HB#{cycle} ping OK → {nid}',
+                         f'latency: {lat}ms | port: {port}',
+                         source='control-plane', target=nid,
+                         status='success', trace_id=tid)
+                hb_state["last_conn"] = hb_state["last_tick"]
+            except Exception as e:
+                push_log('connection_test',
+                         f'HB#{cycle} ping FAILED → {nid}',
+                         str(e),
+                         source='control-plane', target=nid,
+                         status='failed', trace_id=tid)
+
+        # --- OGNI 3 CICLI: dream su nodo casuale ---
+        if cycle % 3 == 0:
+            if active:
+                node = random.choice(active)
+                nid  = node.get("node_id", "node-unknown")
+                phrase = random.choice(DREAM_PHRASES).format(
+                    random.randint(1, 99)
+                )
+                push_log('dream',
+                         f'{nid}: {phrase}',
+                         f'cycle={cycle} | ts={hb_state["last_tick"]}',
+                         source=nid, status='info')
+                hb_state["last_dream"] = hb_state["last_tick"]
+            else:
+                # nessun nodo reale: dream simulato
+                push_log('dream',
+                         f'node-sim: {random.choice(DREAM_PHRASES).format(cycle)}',
+                         f'simulated — no active nodes at cycle {cycle}',
+                         source='node-sim', status='info')
+                hb_state["last_dream"] = hb_state["last_tick"]
+
+        # --- OGNI 5 CICLI: node_chat tra due nodi ---
+        if cycle % 5 == 0:
+            nodes_pool = [n.get("node_id") for n in active] if active else ["node-alpha", "node-beta"]
+            if len(nodes_pool) < 2:
+                nodes_pool = nodes_pool + ["node-sim"]
+            src, dst = random.sample(nodes_pool, 2)
+            q, a_tpl = random.choice(CHAT_PHRASES)
+            answer = a_tpl.format(random.randint(1, 8) if "{}" in a_tpl else "")
+            tid = str(uuid.uuid4())[:8]
+            push_log('node_chat',
+                     f'{src} → {dst}: "{q}"',
+                     f'context: negotiation | cycle={cycle}',
+                     source=src, target=dst, status='info', trace_id=tid)
+            push_log('node_chat',
+                     f'{dst} → {src}: "{answer}"',
+                     f'reply to trace {tid}',
+                     source=dst, target=src, status='info', trace_id=tid)
+            hb_state["last_chat"] = hb_state["last_tick"]
+
+        time.sleep(10)
+
+
+# ----------------------------
 # DASHBOARD HTML
 # ----------------------------
 DASHBOARD_HTML = r"""<!DOCTYPE html>
@@ -290,7 +439,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   --info:#5591c7;--info-bg:rgba(85,145,199,.12);
   --dream:#a86fdf;--dream-bg:rgba(168,111,223,.12);
   --chat:#fdab43;--chat-bg:rgba(253,171,67,.10);
-  --ollama:#6daa45;
   --font-mono:'JetBrains Mono',monospace;
   --font-body:'Inter',sans-serif;
   --radius:5px;--radius-lg:9px;--radius-xl:13px;
@@ -309,10 +457,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   --chat:#b56200;--chat-bg:rgba(181,98,0,.08);
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html{font-size:13px;-webkit-font-smoothing:antialiased;scroll-behavior:smooth}
-body{font-family:var(--font-body);background:var(--bg);color:var(--text);min-height:100vh;display:grid;grid-template-rows:auto 1fr}
+html{font-size:13px;-webkit-font-smoothing:antialiased}
+body{font-family:var(--font-body);background:var(--bg);color:var(--text);min-height:100vh;display:grid;grid-template-rows:auto auto 1fr}
 
-/* ---- HEADER ---- */
+/* HEADER */
 header{
   background:var(--surface);border-bottom:1px solid var(--border);
   padding:0 20px;display:flex;align-items:center;gap:12px;
@@ -325,13 +473,7 @@ nav button{background:none;border:none;cursor:pointer;padding:5px 13px;border-ra
 nav button.active{background:var(--primary-bg);color:var(--primary)}
 nav button:hover:not(.active){background:var(--surface3);color:var(--text)}
 .hdr-right{margin-left:auto;display:flex;align-items:center;gap:10px}
-.ollama-pill{
-  display:flex;align-items:center;gap:5px;
-  background:var(--surface2);border:1px solid var(--border);
-  border-radius:99px;padding:3px 10px;
-  font-size:.7rem;font-family:var(--font-mono);
-  cursor:pointer;transition:border-color var(--tr);
-}
+.ollama-pill{display:flex;align-items:center;gap:5px;background:var(--surface2);border:1px solid var(--border);border-radius:99px;padding:3px 10px;font-size:.7rem;font-family:var(--font-mono);cursor:pointer;transition:border-color var(--tr)}
 .ollama-pill:hover{border-color:var(--primary)}
 .ollama-dot{width:6px;height:6px;border-radius:50%;background:var(--text-faint);flex-shrink:0}
 .ollama-dot.ok{background:var(--success);box-shadow:0 0 4px var(--success)}
@@ -340,7 +482,23 @@ nav button:hover:not(.active){background:var(--surface3);color:var(--text)}
 #themeBtn{background:none;border:1px solid var(--border);cursor:pointer;padding:5px 7px;border-radius:var(--radius);color:var(--text-muted);line-height:1;transition:border-color var(--tr),color var(--tr)}
 #themeBtn:hover{border-color:var(--text-muted);color:var(--text)}
 
-/* ---- LAYOUT ---- */
+/* HB STATUS BAR */
+#hbBar{
+  background:var(--surface2);border-bottom:1px solid var(--border);
+  padding:5px 20px;display:flex;gap:20px;align-items:center;flex-wrap:wrap;
+  font-size:.65rem;font-family:var(--font-mono);color:var(--text-muted);
+}
+.hb-item{display:flex;align-items:center;gap:5px}
+.hb-dot{width:5px;height:5px;border-radius:50%;background:var(--text-faint);flex-shrink:0}
+.hb-dot.ok{background:var(--success)}
+.hb-dot.warn{background:var(--warning)}
+.hb-dot.err{background:var(--error)}
+.hb-label{color:var(--text-faint);text-transform:uppercase;letter-spacing:.06em;margin-right:2px}
+.hb-val{color:var(--text)}
+@keyframes hbpulse{0%,100%{opacity:1}50%{opacity:.25}}
+.hb-live{animation:hbpulse 2s infinite;color:var(--success)}
+
+/* LAYOUT */
 main{padding:18px 20px;display:grid}
 .panel{display:none;flex-direction:column;gap:14px;animation:fadein .18s ease}
 .panel.active{display:flex}
@@ -350,8 +508,8 @@ main{padding:18px 20px;display:grid}
 .card-title{font-size:.75rem;font-weight:600;color:var(--text-muted);margin-bottom:11px;display:flex;align-items:center;gap:7px}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 
-/* ---- BUTTONS ---- */
-.btn{border:none;cursor:pointer;padding:7px 15px;border-radius:var(--radius);font-size:.78rem;font-weight:500;transition:background var(--tr),color var(--tr),box-shadow var(--tr);font-family:var(--font-body);white-space:nowrap}
+/* BUTTONS */
+.btn{border:none;cursor:pointer;padding:7px 15px;border-radius:var(--radius);font-size:.78rem;font-weight:500;transition:background var(--tr),color var(--tr);font-family:var(--font-body);white-space:nowrap}
 .btn-primary{background:var(--primary);color:#fff}.btn-primary:hover{background:var(--primary-h)}
 .btn-ghost{background:var(--surface3);color:var(--text)}.btn-ghost:hover{background:var(--border)}
 .btn-danger{background:var(--error-bg);color:var(--error)}.btn-danger:hover{background:var(--error);color:#fff}
@@ -361,7 +519,7 @@ main{padding:18px 20px;display:grid}
 .btn-chat{background:var(--chat-bg);color:var(--chat)}.btn-chat:hover{background:var(--chat);color:#000}
 .btn-sm{padding:4px 10px;font-size:.72rem}
 
-/* ---- INPUTS ---- */
+/* INPUTS */
 .inp{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:7px 11px;color:var(--text);font-size:.8rem;font-family:var(--font-body);transition:border-color var(--tr)}
 .inp:focus{outline:none;border-color:var(--primary)}
 .inp-mono{font-family:var(--font-mono)}
@@ -371,24 +529,14 @@ main{padding:18px 20px;display:grid}
 .hint{font-size:.65rem;color:var(--text-muted);margin-top:3px}
 .fg{display:flex;flex-direction:column;gap:4px}
 
-/* ---- TASKS ---- */
+/* TASKS */
 .task-form{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 @media(max-width:640px){.task-form{grid-template-columns:1fr}}
-.task-out{
-  background:var(--surface2);border:1px solid var(--border);
-  border-radius:var(--radius-lg);padding:14px;
-  font-family:var(--font-mono);font-size:.72rem;color:var(--text);
-  white-space:pre-wrap;max-height:340px;overflow-y:auto;min-height:60px;
-}
+.task-out{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px;font-family:var(--font-mono);font-size:.72rem;color:var(--text);white-space:pre-wrap;max-height:340px;overflow-y:auto;min-height:60px}
 
-/* ---- LOG VIEWER ---- */
+/* LOG VIEWER */
 .log-tabs{display:flex;gap:4px;flex-wrap:wrap}
-.lt{
-  background:var(--surface2);border:1px solid var(--border);
-  border-radius:var(--radius);padding:4px 11px;
-  cursor:pointer;font-size:.72rem;font-weight:600;color:var(--text-muted);
-  transition:all var(--tr);font-family:var(--font-body);
-}
+.lt{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:4px 11px;cursor:pointer;font-size:.72rem;font-weight:600;color:var(--text-muted);transition:all var(--tr);font-family:var(--font-body)}
 .lt:hover{background:var(--surface3);color:var(--text)}
 .lt.active{background:var(--surface3);color:var(--text);border-color:var(--text-muted)}
 .lt.active[data-type=""]{border-color:var(--primary);color:var(--primary)}
@@ -400,36 +548,20 @@ main{padding:18px 20px;display:grid}
 .filter-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .filter-row .inp,.filter-row .sel{font-size:.75rem}
 .log-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;font-family:var(--font-mono)}
-.log-thead{
-  display:grid;grid-template-columns:118px 105px 108px 98px 72px 1fr;
-  gap:0;font-size:.63rem;font-weight:700;color:var(--text-muted);
-  letter-spacing:.07em;text-transform:uppercase;
-  padding:6px 12px;border-bottom:1px solid var(--divider);background:var(--surface2);
-}
+.log-thead{display:grid;grid-template-columns:118px 105px 108px 98px 72px 1fr;font-size:.63rem;font-weight:700;color:var(--text-muted);letter-spacing:.07em;text-transform:uppercase;padding:6px 12px;border-bottom:1px solid var(--divider);background:var(--surface2)}
 .log-body{max-height:440px;overflow-y:auto}
-.log-row{
-  display:grid;grid-template-columns:118px 105px 108px 98px 72px 1fr;
-  gap:0;padding:6px 12px;border-bottom:1px solid var(--divider);
-  cursor:pointer;transition:background var(--tr);font-size:.72rem;align-items:start;
-}
+.log-row{display:grid;grid-template-columns:118px 105px 108px 98px 72px 1fr;padding:6px 12px;border-bottom:1px solid var(--divider);cursor:pointer;transition:background var(--tr);font-size:.72rem;align-items:start}
 .log-row:last-child{border-bottom:none}
 .log-row:hover{background:var(--surface3)}
 .log-row .ts{color:var(--text-muted);font-size:.65rem;padding-top:1px}
-.tbadge{
-  display:inline-flex;align-items:center;padding:2px 7px;
-  border-radius:99px;font-size:.6rem;font-weight:700;
-  text-transform:uppercase;letter-spacing:.05em;white-space:nowrap;
-}
+.tbadge{display:inline-flex;align-items:center;padding:2px 7px;border-radius:99px;font-size:.6rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap}
 .tb-connection_test{background:var(--success-bg);color:var(--success)}
 .tb-inter_node_message{background:var(--info-bg);color:var(--info)}
 .tb-dream{background:var(--dream-bg);color:var(--dream)}
 .tb-node_chat{background:var(--chat-bg);color:var(--chat)}
 .tb-authority_event{background:var(--warning-bg);color:var(--warning)}
 .tb-system{background:var(--surface3);color:var(--text-muted)}
-.sbadge{
-  display:inline-flex;padding:2px 7px;border-radius:99px;
-  font-size:.6rem;font-weight:700;text-transform:uppercase;
-}
+.sbadge{display:inline-flex;padding:2px 7px;border-radius:99px;font-size:.6rem;font-weight:700;text-transform:uppercase}
 .st-success{background:var(--success-bg);color:var(--success)}
 .st-failed{background:var(--error-bg);color:var(--error)}
 .st-warning{background:var(--warning-bg);color:var(--warning)}
@@ -437,45 +569,24 @@ main{padding:18px 20px;display:grid}
 .st-info{background:var(--surface3);color:var(--text-muted)}
 .log-row .summary{color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:8px}
 .log-row .nc{color:var(--text-muted);font-size:.67rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.detail-row{
-  display:none;padding:7px 12px 11px;
-  background:var(--surface2);border-top:1px solid var(--divider);
-  font-size:.68rem;color:var(--text-muted);
-  white-space:pre-wrap;word-break:break-all;
-}
+.detail-row{display:none;padding:7px 12px 11px;background:var(--surface2);border-top:1px solid var(--divider);font-size:.68rem;color:var(--text-muted);white-space:pre-wrap;word-break:break-all}
 .detail-row.open{display:block}
-.log-footer{
-  display:flex;align-items:center;gap:10px;
-  padding:6px 12px;background:var(--surface2);
-  border-top:1px solid var(--divider);
-  font-size:.68rem;color:var(--text-muted);
-}
+.log-footer{display:flex;align-items:center;gap:10px;padding:6px 12px;background:var(--surface2);border-top:1px solid var(--divider);font-size:.68rem;color:var(--text-muted)}
 .pulse{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--success);animation:pulse 2s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 .log-empty{padding:36px;text-align:center;color:var(--text-faint);font-size:.78rem}
 
-/* ---- DIAGNOSTICS ---- */
+/* DIAGNOSTICS */
 .diag-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
-.diag-out{
-  margin-top:8px;padding:9px;border-radius:var(--radius);
-  background:var(--surface2);font-family:var(--font-mono);
-  font-size:.68rem;color:var(--text-muted);
-  white-space:pre-wrap;min-height:44px;border:1px solid var(--divider);
-  max-height:180px;overflow-y:auto;
-}
+.diag-out{margin-top:8px;padding:9px;border-radius:var(--radius);background:var(--surface2);font-family:var(--font-mono);font-size:.68rem;color:var(--text-muted);white-space:pre-wrap;min-height:44px;border:1px solid var(--divider);max-height:180px;overflow-y:auto}
 
-/* ---- SETUP ---- */
+/* SETUP */
 .setup-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 @media(max-width:680px){.setup-grid{grid-template-columns:1fr}}
 .secret-row{display:flex;gap:7px;align-items:center}
 .secret-row .inp{flex:1;font-family:var(--font-mono);letter-spacing:.08em}
 .mode-row{display:flex;gap:7px}
-.mode-btn{
-  flex:1;background:var(--surface2);border:1px solid var(--border);
-  border-radius:var(--radius);padding:9px;cursor:pointer;
-  text-align:center;font-size:.75rem;font-weight:600;
-  color:var(--text-muted);transition:all var(--tr);font-family:var(--font-body);
-}
+.mode-btn{flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:9px;cursor:pointer;text-align:center;font-size:.75rem;font-weight:600;color:var(--text-muted);transition:all var(--tr);font-family:var(--font-body)}
 .mode-btn.active{background:var(--primary-bg);border-color:var(--primary);color:var(--primary)}
 .setup-footer{display:flex;gap:8px;justify-content:flex-end;padding-top:10px;border-top:1px solid var(--divider)}
 .mht-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:99px;font-size:.6rem;font-weight:700;background:var(--dream-bg);color:var(--dream);margin-left:8px}
@@ -483,25 +594,13 @@ main{padding:18px 20px;display:grid}
 .mesh-section.on{opacity:1;pointer-events:all}
 #saveMsg{font-size:.72rem;color:var(--success);text-align:right;min-height:16px;margin-top:4px}
 
-/* ---- OLLAMA MODAL ---- */
-.modal-overlay{
-  display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);
-  z-index:300;align-items:center;justify-content:center;
-}
+/* OLLAMA MODAL */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:300;align-items:center;justify-content:center}
 .modal-overlay.open{display:flex}
-.modal{
-  background:var(--surface);border:1px solid var(--border);
-  border-radius:var(--radius-xl);padding:22px;min-width:340px;max-width:480px;width:90%;
-  box-shadow:0 20px 60px rgba(0,0,0,.4);
-}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-xl);padding:22px;min-width:340px;max-width:480px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
 .modal-title{font-size:.85rem;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px}
 .model-list{display:flex;flex-direction:column;gap:5px;max-height:220px;overflow-y:auto;margin:10px 0}
-.model-item{
-  display:flex;align-items:center;gap:8px;
-  padding:7px 10px;border-radius:var(--radius);
-  background:var(--surface2);font-family:var(--font-mono);font-size:.72rem;
-  color:var(--text);
-}
+.model-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:var(--radius);background:var(--surface2);font-family:var(--font-mono);font-size:.72rem;color:var(--text)}
 .model-dot{width:5px;height:5px;border-radius:50%;background:var(--success);flex-shrink:0}
 .modal-close{margin-left:auto;background:var(--surface3);border:none;cursor:pointer;padding:4px 10px;border-radius:var(--radius);color:var(--text-muted);font-size:.75rem}
 
@@ -544,6 +643,17 @@ main{padding:18px 20px;display:grid}
     </button>
   </div>
 </header>
+
+<!-- HB STATUS BAR -->
+<div id="hbBar">
+  <div class="hb-item"><span class="hb-dot" id="hbDot"></span><span class="hb-label">HB</span><span class="hb-val" id="hbCycle">—</span></div>
+  <div class="hb-item"><span class="hb-label">Tick</span><span class="hb-val" id="hbTick">—</span></div>
+  <div class="hb-item"><span class="hb-label">Nodes</span><span class="hb-val" id="hbNodes">—</span></div>
+  <div class="hb-item"><span class="hb-label">Last conn</span><span class="hb-val" id="hbConn">—</span></div>
+  <div class="hb-item"><span class="hb-label">Last dream</span><span class="hb-val" id="hbDream">—</span></div>
+  <div class="hb-item"><span class="hb-label">Last chat</span><span class="hb-val" id="hbChat">—</span></div>
+  <span class="hb-live" style="margin-left:auto">● LIVE</span>
+</div>
 
 <!-- MAIN -->
 <main>
@@ -599,7 +709,6 @@ main{padding:18px 20px;display:grid}
       <label style="display:flex;align-items:center;gap:5px;font-size:.72rem;color:var(--text-muted);cursor:pointer">
         <input type="checkbox" id="autoScroll" checked> Auto-scroll
       </label>
-      <button class="btn btn-ghost btn-sm" onclick="injectSamples()">Inject samples</button>
       <button class="btn btn-danger btn-sm" onclick="clearLogs()">Clear</button>
     </div>
     <div class="log-wrap">
@@ -621,28 +730,24 @@ main{padding:18px 20px;display:grid}
   <div id="panel-diag" class="panel">
     <div class="sec-title">Node Diagnostics</div>
     <div class="diag-grid">
-
       <div class="card">
         <div class="card-title">🔌 Authority Reachability</div>
         <p style="font-size:.72rem;color:var(--text-muted);margin-bottom:10px">Verifica connessione verso l'authority server.</p>
         <button class="btn btn-primary btn-sm" onclick="testAuth()">Run Test</button>
         <div class="diag-out" id="dAuth">—</div>
       </div>
-
       <div class="card">
         <div class="card-title">📡 Active Nodes</div>
         <p style="font-size:.72rem;color:var(--text-muted);margin-bottom:10px">Lista nodi attivi registrati sull'authority.</p>
         <button class="btn btn-ghost btn-sm" onclick="listNodes()">Refresh</button>
         <div class="diag-out" id="dNodes">—</div>
       </div>
-
       <div class="card">
         <div class="card-title">🤖 Ollama Status</div>
         <p style="font-size:.72rem;color:var(--text-muted);margin-bottom:10px">Verifica Ollama e modelli disponibili.</p>
         <button class="btn btn-success btn-sm" onclick="checkOllama()">Check Ollama</button>
         <div class="diag-out" id="dOllama">—</div>
       </div>
-
       <div class="card">
         <div class="card-title">💭 Simulate Dream</div>
         <p style="font-size:.72rem;color:var(--text-muted);margin-bottom:8px">Inietta un evento dream nel log stream.</p>
@@ -653,7 +758,6 @@ main{padding:18px 20px;display:grid}
         <button class="btn btn-dream btn-sm" onclick="sendDream()">Send Dream</button>
         <div class="diag-out" id="dDream">—</div>
       </div>
-
       <div class="card">
         <div class="card-title">💬 Simulate Node Chat</div>
         <p style="font-size:.72rem;color:var(--text-muted);margin-bottom:8px">Simula messaggi tra nodi.</p>
@@ -665,22 +769,24 @@ main{padding:18px 20px;display:grid}
         <button class="btn btn-chat btn-sm" onclick="sendChat()">Send Chat</button>
         <div class="diag-out" id="dChat">—</div>
       </div>
-
       <div class="card">
         <div class="card-title">📊 Connection Test (multi-node)</div>
         <p style="font-size:.72rem;color:var(--text-muted);margin-bottom:8px">Ping tutti i nodi attivi e log risultato.</p>
         <button class="btn btn-ghost btn-sm" onclick="pingAllNodes()">Ping All Nodes</button>
         <div class="diag-out" id="dPing">—</div>
       </div>
-
+      <div class="card">
+        <div class="card-title">⚙️ Heartbeat Status</div>
+        <p style="font-size:.72rem;color:var(--text-muted);margin-bottom:8px">Stato del loop heartbeat interno.</p>
+        <button class="btn btn-ghost btn-sm" onclick="checkHb()">Refresh HB</button>
+        <div class="diag-out" id="dHb">—</div>
+      </div>
     </div>
   </div>
 
   <!-- ADVANCED SETUP -->
   <div id="panel-setup" class="panel">
     <div class="sec-title">Advanced Setup</div>
-
-    <!-- SECRET -->
     <div class="card">
       <div class="card-title">
         🔑 Security — Shared Secret
@@ -696,8 +802,6 @@ main{padding:18px 20px;display:grid}
         <span class="hint">Autentica i nodi sulla rete. Ruotalo periodicamente.</span>
       </div>
     </div>
-
-    <!-- AUTHORITY -->
     <div class="card">
       <div class="card-title">🏛️ Authority Server</div>
       <div class="setup-grid">
@@ -729,8 +833,6 @@ main{padding:18px 20px;display:grid}
         </div>
       </div>
     </div>
-
-    <!-- OLLAMA -->
     <div class="card">
       <div class="card-title">🤖 Ollama Configuration</div>
       <div class="setup-grid">
@@ -746,8 +848,6 @@ main{padding:18px 20px;display:grid}
         </div>
       </div>
     </div>
-
-    <!-- NETWORK MODE -->
     <div class="card">
       <div class="card-title">🌐 Network Mode <span class="mht-badge">MHT — coming soon</span></div>
       <div class="setup-grid">
@@ -774,7 +874,6 @@ main{padding:18px 20px;display:grid}
         </div>
       </div>
     </div>
-
     <div class="setup-footer">
       <button class="btn btn-ghost" onclick="loadCfg()">↺ Reset</button>
       <button class="btn btn-primary" onclick="saveCfg()">💾 Save Configuration</button>
@@ -800,7 +899,7 @@ main{padding:18px 20px;display:grid}
 </div>
 
 <script>
-// ===================== THEME =====================
+// THEME
 (function(){
   const r=document.documentElement,btn=document.getElementById('themeBtn');
   let d='dark'; r.setAttribute('data-theme',d);
@@ -812,11 +911,11 @@ main{padding:18px 20px;display:grid}
   btn.addEventListener('click',()=>{ d=d==='dark'?'light':'dark'; r.setAttribute('data-theme',d); btn.innerHTML=icons[d]; });
 })();
 
-// ===================== CLOCK =====================
+// CLOCK
 function tick(){ document.getElementById('clock').textContent=new Date().toISOString().replace('T',' ').slice(0,19)+' UTC'; }
 setInterval(tick,1000); tick();
 
-// ===================== NAV =====================
+// NAV
 function showPanel(name,btn){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
@@ -827,7 +926,23 @@ function showPanel(name,btn){
   if(name==='diag') { checkOllamaDot(); }
 }
 
-// ===================== TASKS =====================
+// HB STATUS BAR
+async function refreshHbBar(){
+  try{
+    const d=await(await fetch('/hb/status')).json();
+    const dot=document.getElementById('hbDot');
+    document.getElementById('hbCycle').textContent='#'+d.cycle;
+    document.getElementById('hbTick').textContent=d.last_tick?d.last_tick.slice(11,19):'—';
+    document.getElementById('hbNodes').textContent=d.nodes_seen&&d.nodes_seen.length?d.nodes_seen.join(', '):'none';
+    document.getElementById('hbConn').textContent=d.last_conn?d.last_conn.slice(11,19):'—';
+    document.getElementById('hbDream').textContent=d.last_dream?d.last_dream.slice(11,19):'—';
+    document.getElementById('hbChat').textContent=d.last_chat?d.last_chat.slice(11,19):'—';
+    dot.className='hb-dot '+(d.running?'ok':'err');
+  }catch(e){}
+}
+setInterval(refreshHbBar,5000); refreshHbBar();
+
+// TASKS
 async function createTask(){
   const id=document.getElementById('tId').value.trim();
   const prompt=document.getElementById('tPrompt').value.trim();
@@ -859,10 +974,9 @@ async function refreshTasks(){
 }
 setInterval(refreshTasks,4000); refreshTasks();
 
-// ===================== LOG VIEWER =====================
+// LOG VIEWER
 let curType='';
 const stEmoji={success:'✅',failed:'❌',warning:'⚠️',pending:'⏳',info:'ℹ️'};
-
 function setTab(type,btn){
   curType=type;
   document.querySelectorAll('.lt').forEach(t=>t.classList.remove('active'));
@@ -906,25 +1020,9 @@ function renderLogs(logs){
 }
 function toggleD(id){const e=document.getElementById(id);if(e)e.classList.toggle('open');}
 async function clearLogs(){await fetch('/logs/clear',{method:'POST'});refreshLogs();}
-async function injectSamples(){
-  const samples=[
-    {type:'connection_test',summary:'Handshake OK → node-alpha',detail:'latency: 12ms  |  protocol: HTTP/1.1',sourceNode:'control-plane',targetNode:'node-alpha',status:'success'},
-    {type:'connection_test',summary:'Handshake FAILED → node-gamma',detail:'connection refused (ECONNREFUSED)',sourceNode:'control-plane',targetNode:'node-gamma',status:'failed'},
-    {type:'inter_node_message',summary:'task-007 dispatched to node-beta',detail:'{"task":"summarize","model":"phi3","prompt":"Summarize the AGI paper..."}',sourceNode:'control-plane',targetNode:'node-beta',status:'pending'},
-    {type:'inter_node_message',summary:'task-007 result from node-beta',detail:'{"tokens":512,"duration":"3.2s","result":"The paper describes..."}',sourceNode:'node-beta',targetNode:'control-plane',status:'success'},
-    {type:'dream',summary:'node-alpha: autonomous planning cycle started',detail:'phase1: scan tools\nphase2: draft plan\nphase3: execute sub-task\nphase4: consolidate memory',sourceNode:'node-alpha',status:'info'},
-    {type:'dream',summary:'node-beta: dream cycle #14 completed',detail:'duration: 4.2s | memory updated | 3 new associations formed',sourceNode:'node-beta',status:'success'},
-    {type:'node_chat',summary:'node-alpha → node-beta: "can you handle summarize?"',detail:'context: task-negotiation | priority: normal',sourceNode:'node-alpha',targetNode:'node-beta',status:'info'},
-    {type:'node_chat',summary:'node-beta → node-alpha: "yes, 2 slots free"',detail:'queue_depth: 2 | capacity: 4',sourceNode:'node-beta',targetNode:'node-alpha',status:'info'},
-    {type:'authority_event',summary:'Shared secret rotated successfully',detail:'rotatedAt: '+new Date().toISOString(),sourceNode:'control-plane',status:'success'},
-    {type:'system',summary:'Control-plane v1.01 started',detail:'port: 8085 | authority: http://authority:8080',sourceNode:'control-plane',status:'info'},
-  ];
-  for(const s of samples) await fetch('/logs/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(s)});
-  refreshLogs();
-}
-setInterval(refreshLogs,4000);
+setInterval(refreshLogs,5000);
 
-// ===================== DIAGNOSTICS =====================
+// DIAGNOSTICS
 async function testAuth(){
   document.getElementById('dAuth').textContent='Testing…';
   const d=await(await fetch('/config/authority/test',{method:'POST'})).json();
@@ -942,6 +1040,10 @@ async function checkOllama(){
   document.getElementById('dOllama').textContent='Checking…';
   const d=await(await fetch('/ollama/status')).json();
   document.getElementById('dOllama').textContent=JSON.stringify(d,null,2);
+}
+async function checkHb(){
+  const d=await(await fetch('/hb/status')).json();
+  document.getElementById('dHb').textContent=JSON.stringify(d,null,2);
 }
 async function sendDream(){
   const node=document.getElementById('drNode').value.trim()||'node-unknown';
@@ -986,7 +1088,7 @@ async function pingAllNodes(){
   }catch(e){document.getElementById('dPing').textContent='Error: '+e.message;}
 }
 
-// ===================== OLLAMA DOT =====================
+// OLLAMA DOT
 async function checkOllamaDot(){
   const d=await(await fetch('/ollama/status')).json();
   const dot=document.getElementById('ollamaDot');
@@ -1003,7 +1105,7 @@ async function checkOllamaDot(){
 }
 setInterval(checkOllamaDot,30000); checkOllamaDot();
 
-// ===================== OLLAMA MODAL =====================
+// OLLAMA MODAL
 function openOllamaModal(){document.getElementById('ollamaModal').classList.add('open');checkOllamaModal();}
 function closeModal(){document.getElementById('ollamaModal').classList.remove('open');}
 async function checkOllamaModal(){
@@ -1028,9 +1130,8 @@ async function checkOllamaModal(){
   }
 }
 
-// ===================== ADVANCED SETUP =====================
+// ADVANCED SETUP
 let _authEnabled=true, _netMode='authority', _mhtEnabled=false;
-
 async function loadCfg(){
   const c=await(await fetch('/config/advanced')).json();
   document.getElementById('secVal').value='';
@@ -1103,18 +1204,6 @@ function showMsg(m){
 @app.route('/dashboard')
 def dashboard():
     return DASHBOARD_HTML
-
-
-# ----------------------------
-# HEARTBEAT
-# ----------------------------
-def heartbeat_loop():
-    time.sleep(2)
-    push_log('system', 'Control-plane v1.01 started',
-             detail='port=8085 | authority='+advanced_config['authority']['serverUrl'],
-             status='info')
-    while True:
-        time.sleep(5)
 
 
 # ----------------------------
