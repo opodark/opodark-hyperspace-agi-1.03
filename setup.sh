@@ -17,11 +17,11 @@ echo -e "${BOLD}${CYAN}⬢  HyperSpace AGI v0.2 — Setup${RESET}"
 echo -e "    Mesh di agenti IA locali su Docker + modelli LLM"
 echo -e ""
 
-# ── 1. Dipendenze ──────────────────────────────────────────────────────────
+# ── 1. Dipendenze ─────────────────────────────────────────────────────
 hdr "1/4 — Verifica dipendenze"
 
 if ! command -v docker &>/dev/null; then
-    err "'docker' non trovato. Installa Docker Desktop: https://docs.docker.com/get-docker/"
+    err "Docker non trovato. Installa Docker Desktop: https://docs.docker.com/get-docker/"
 fi
 log "docker ✓"
 
@@ -30,7 +30,7 @@ if ! docker compose version &>/dev/null; then
 fi
 log "docker compose ✓"
 
-# ── 2. .env ─────────────────────────────────────────────────────────────────
+# ── 2. .env ────────────────────────────────────────────────────────────
 hdr "2/4 — Configurazione .env"
 
 if [ ! -f .env ]; then
@@ -49,15 +49,15 @@ set_env() {
     fi
 }
 
-# ── 3. Backend inferenza ─────────────────────────────────────────────────────
+# ── 3. Backend inferenza ────────────────────────────────────────────────────
 hdr "3/4 — Backend di inferenza LLM"
 
 echo ""
-echo "  Quale backend vuoi usare per i modelli LLM?"
+echo "  Quale backend vuoi usare?"
 echo ""
-echo "  1) Ollama nativo   — installato/avviato sull'host (consigliato)"
-echo "  2) LM Studio       — API OpenAI-compatibile di LM Studio"
-echo "  3) Ollama in Docker — legacy, più lento (solo per test)"
+echo "  1) Ollama nativo  (deve essere già installato e in esecuzione sull'host)"
+echo "  2) LM Studio      (Local Server attivo sull'app)"
+echo "  3) Ollama Docker  (legacy, avvia ollama come container)"
 echo ""
 read -rp "  Scelta [1/2/3, default 1]: " BACKEND_CHOICE
 BACKEND_CHOICE=${BACKEND_CHOICE:-1}
@@ -67,74 +67,37 @@ case "$BACKEND_CHOICE" in
 1)
     log "Backend: Ollama nativo"
     set_env "INFERENCE_BACKEND" "ollama"
-
-    if command -v ollama &>/dev/null; then
-        OLLAMA_VER=$(ollama --version 2>/dev/null || echo "?")
-        log "Ollama già installato: $OLLAMA_VER"
-    else
-        warn "Ollama non trovato."
-        read -rp "  Installa Ollama ora? (richiede curl) [Y/n]: " INSTALL_OLLAMA
-        INSTALL_OLLAMA=${INSTALL_OLLAMA:-Y}
-        if [[ "$INSTALL_OLLAMA" =~ ^[Yy] ]]; then
-            log "Installazione Ollama..."
-            curl -fsSL https://ollama.com/install.sh | sh
-            log "Ollama installato."
-        else
-            warn "Installa Ollama manualmente: https://ollama.com/download"
-        fi
-    fi
-
-    if ! curl -sf http://127.0.0.1:11434/api/tags &>/dev/null; then
-        log "Avvio Ollama in background..."
-        nohup ollama serve &>/tmp/ollama.log &
-        sleep 3
-        if curl -sf http://127.0.0.1:11434/api/tags &>/dev/null; then
-            log "Ollama attivo su :11434"
-        else
-            warn "Ollama non risponde ancora. Avvialo con: ollama serve"
-        fi
-    else
-        log "Ollama già attivo su :11434"
-    fi
-
     echo ""
-    MODELS_JSON=$(curl -sf http://127.0.0.1:11434/api/tags 2>/dev/null || echo '{"models":[]}')
-    MODELS_COUNT=$(echo "$MODELS_JSON" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('models',[])))" 2>/dev/null || echo 0)
-    if [ "$MODELS_COUNT" -eq 0 ]; then
-        warn "Nessun modello installato in Ollama."
-        echo "  Modelli consigliati:"
-        echo "    phi3        — 3.8B  ~2.3 GB  (veloce, CPU)"
-        echo "    llama3:8b   — 8B    ~5 GB"
-        echo "    mistral:7b  — 7B    ~4.5 GB"
-        echo "    qwen2:7b    — 7B    ~4.5 GB  (multilingue)"
-        echo ""
-        read -rp "  Modello da scaricare [default: phi3]: " PULL_MODEL
-        PULL_MODEL=${PULL_MODEL:-phi3}
-        log "Download $PULL_MODEL ..."
-        ollama pull "$PULL_MODEL"
-        set_env "OLLAMA_MODEL" "$PULL_MODEL"
-        log "Modello $PULL_MODEL pronto."
+    read -rp "  URL Ollama [default: http://localhost:11434]: " OLLAMA_INPUT
+    OLLAMA_INPUT=${OLLAMA_INPUT:-http://localhost:11434}
+
+    # Verifica connessione
+    if curl -sf "${OLLAMA_INPUT}/api/tags" &>/dev/null; then
+        log "Ollama raggiungibile su $OLLAMA_INPUT"
     else
-        DEFAULT_MODEL=$(echo "$MODELS_JSON" | python3 -c "import sys,json; ms=json.load(sys.stdin).get('models',[]); print(ms[0]['name'] if ms else 'phi3')" 2>/dev/null || echo "phi3")
-        log "Modelli: $MODELS_COUNT disponibili. Default: $DEFAULT_MODEL"
-        set_env "OLLAMA_MODEL" "$DEFAULT_MODEL"
+        warn "Ollama non risponde su $OLLAMA_INPUT"
+        warn "Assicurati che Ollama sia avviato: ollama serve"
     fi
 
+    # Rimappa per i container Docker
     OS_TYPE=$(uname -s)
-    if [ "$OS_TYPE" = "Darwin" ]; then
-        OLLAMA_HOST="host.docker.internal"
-    else
-        if getent hosts host.docker.internal &>/dev/null; then
-            OLLAMA_HOST="host.docker.internal"
+    OLLAMA_DOCKER_URL="$OLLAMA_INPUT"
+    if echo "$OLLAMA_INPUT" | grep -qE "localhost|127\.0\.0\.1"; then
+        OLLAMA_PORT=$(echo "$OLLAMA_INPUT" | grep -oE '[0-9]+$' || echo "11434")
+        if [ "$OS_TYPE" = "Darwin" ]; then
+            OLLAMA_DOCKER_URL="http://host.docker.internal:${OLLAMA_PORT}"
         else
-            DOCKER0_IP=$(ip addr show docker0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1 || echo "172.17.0.1")
-            OLLAMA_HOST="$DOCKER0_IP"
-            warn "Usando docker0 IP: $OLLAMA_HOST"
+            if getent hosts host.docker.internal &>/dev/null; then
+                OLLAMA_DOCKER_URL="http://host.docker.internal:${OLLAMA_PORT}"
+            else
+                DOCKER0_IP=$(ip addr show docker0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1 || echo "172.17.0.1")
+                OLLAMA_DOCKER_URL="http://${DOCKER0_IP}:${OLLAMA_PORT}"
+                warn "Linux: usando docker0 IP $DOCKER0_IP per raggiungere l'host"
+            fi
         fi
     fi
-    OLLAMA_URL="http://${OLLAMA_HOST}:11434"
-    set_env "OLLAMA_URL" "$OLLAMA_URL"
-    log "OLLAMA_URL: $OLLAMA_URL"
+    set_env "OLLAMA_URL" "$OLLAMA_DOCKER_URL"
+    log "OLLAMA_URL impostato: $OLLAMA_DOCKER_URL"
     COMPOSE_PROFILE=""
     ;;
 
@@ -142,15 +105,22 @@ case "$BACKEND_CHOICE" in
     log "Backend: LM Studio"
     set_env "INFERENCE_BACKEND" "lmstudio"
     echo ""
-    echo "  LM Studio: abilita Local Server dall'app (porta default: 1234)"
+    echo "  Assicurati che LM Studio sia aperto con Local Server attivo."
     echo ""
     read -rp "  URL LM Studio [default: http://localhost:1234]: " LMS_INPUT
-    LMS_URL=${LMS_INPUT:-http://localhost:1234}
+    LMS_INPUT=${LMS_INPUT:-http://localhost:1234}
+
+    if curl -sf "${LMS_INPUT}/v1/models" &>/dev/null; then
+        log "LM Studio raggiungibile su $LMS_INPUT"
+    else
+        warn "LM Studio non risponde su $LMS_INPUT"
+        warn "Apri LM Studio -> Local Server -> Start Server"
+    fi
 
     OS_TYPE=$(uname -s)
-    LMS_DOCKER_URL="$LMS_URL"
-    if echo "$LMS_URL" | grep -qE "localhost|127\.0\.0\.1"; then
-        LMS_PORT=$(echo "$LMS_URL" | grep -oE '[0-9]+$' || echo "1234")
+    LMS_DOCKER_URL="$LMS_INPUT"
+    if echo "$LMS_INPUT" | grep -qE "localhost|127\.0\.0\.1"; then
+        LMS_PORT=$(echo "$LMS_INPUT" | grep -oE '[0-9]+$' || echo "1234")
         if [ "$OS_TYPE" = "Darwin" ]; then
             LMS_DOCKER_URL="http://host.docker.internal:${LMS_PORT}"
         else
@@ -161,31 +131,19 @@ case "$BACKEND_CHOICE" in
     set_env "OLLAMA_URL" "$LMS_DOCKER_URL"
     set_env "LMS_URL" "$LMS_DOCKER_URL"
     log "OLLAMA_URL (LM Studio): $LMS_DOCKER_URL"
-
-    if curl -sf "${LMS_URL}/v1/models" &>/dev/null; then
-        log "LM Studio raggiungibile."
-        FIRST_MODEL=$(curl -sf "${LMS_URL}/v1/models" | python3 -c "import sys,json; d=json.load(sys.stdin); ms=d.get('data',[]); print(ms[0]['id'] if ms else 'local-model')" 2>/dev/null || echo "local-model")
-        set_env "OLLAMA_MODEL" "$FIRST_MODEL"
-        log "Modello attivo: $FIRST_MODEL"
-    else
-        warn "LM Studio non risponde su ${LMS_URL}."
-        warn "Avvia LM Studio e abilita il Local Server prima di avviare i nodi."
-        read -rp "  Continuare comunque? [y/N]: " CONT
-        [[ "$CONT" =~ ^[Yy] ]] || { echo "Setup interrotto."; exit 0; }
-    fi
     COMPOSE_PROFILE=""
     ;;
 
 3)
-    warn "Modalità Ollama-in-Docker (legacy). Più lenta, consigliata solo per test."
+    warn "Modalità Ollama-in-Docker (legacy)."
     set_env "INFERENCE_BACKEND" "ollama-docker"
     set_env "OLLAMA_URL" "http://ollama:11434"
     COMPOSE_PROFILE="--profile with-ollama"
-    log "Container ollama sarà avviato insieme ai nodi."
+    log "Container ollama sarà avviato."
     ;;
 
 *)
-    warn "Scelta non valida. Usando Ollama nativo (default)."
+    warn "Scelta non valida. Usando Ollama nativo con URL default."
     set_env "INFERENCE_BACKEND" "ollama"
     set_env "OLLAMA_URL" "http://host.docker.internal:11434"
     COMPOSE_PROFILE=""
@@ -193,7 +151,7 @@ case "$BACKEND_CHOICE" in
 
 esac
 
-# ── 4. Avvio container ───────────────────────────────────────────────────────────
+# ── 4. Avvio container ────────────────────────────────────────────────────────
 hdr "4/4 — Avvio HyperSpace AGI"
 
 COMPOSE_FILE="docker-compose.prod.yml"
