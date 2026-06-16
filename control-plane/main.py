@@ -13,7 +13,7 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# ── CONFIG ────────────────────────────────────────────────
+# ── CONFIG ────────────────────────────────────────────────────
 NODE_ENDPOINTS = [
     e.strip() for e in os.getenv("NODE_ENDPOINTS", "node:8084").split(",") if e.strip()
 ]
@@ -23,11 +23,14 @@ _AUTHORITY_URL     = os.getenv("AUTHORITY_URL", "http://authority:8080")
 _AUTHORITY_ENABLED = os.getenv("AUTHORITY_ENABLED", "false").lower() == "true"
 LOG_LIMIT = 500
 
-# ── STATE ─────────────────────────────────────────────────
+# ── STATE ─────────────────────────────────────────────────────
 tasks      = {}
 event_logs = []
-_mesh_nodes: dict       = {}
-_known_endpoints: set   = set(NODE_ENDPOINTS)
+
+# Registro nodi: node_id -> info (unico per node_id)
+_nodes_by_id: dict  = {}
+# Set endpoint noti per il polling
+_known_endpoints: set = set(NODE_ENDPOINTS)
 
 hb_state = {
     "cycle": 0, "last_tick": None, "last_conn": None,
@@ -42,7 +45,40 @@ advanced_config = {
     "security":   {"sharedSecret": "", "secretRotatedAt": None},
 }
 
-# ── LOG ──────────────────────────────────────────────────
+# ── HELPERS ───────────────────────────────────────────────────
+def _ep_to_url(ep: str) -> str:
+    return ep.rstrip("/") if ep.startswith("http") else f"http://{ep}"
+
+def _is_public_ep(ep: str) -> bool:
+    """True se l'endpoint è raggiungibile dall'esterno (https:// o IP reale)."""
+    if ep.startswith("https://"):
+        return True
+    if ep.startswith("http://"):
+        host = ep.split("//")[1].split(":")[0].split("/")[0]
+        # Escludi nomi interni Docker (nessun punto) e localhost
+        return "." in host and host not in ("localhost",)
+    # Senza schema: "node:8084" -> interno, "1.2.3.4:8084" -> ok
+    host = ep.split(":")[0]
+    return "." in host
+
+def _best_endpoint(node_info: dict) -> str:
+    """Restituisce l'endpoint migliore per raggiungere il nodo.
+    Priorità: https:// > http:// pubblico > qualunque cosa.
+    """
+    ep = node_info.get("endpoint", "")
+    if ep.startswith("https://"):
+        return ep
+    # Cerca endpoint https nei dati del nodo
+    public = node_info.get("public_endpoint", "")
+    if public and public.startswith("https://"):
+        return public
+    return ep
+
+def _node_list() -> list:
+    """Lista nodi unici (deduplicati per node_id)."""
+    return list(_nodes_by_id.values())
+
+# ── LOG ───────────────────────────────────────────────────────
 LOG_TYPES = {"connection_test","inter_node_message","dream","node_chat","system","mesh_event"}
 
 def push_log(type_, summary, detail="", source="control-plane", target="", status="info", trace_id=""):
@@ -62,53 +98,72 @@ def push_log(type_, summary, detail="", source="control-plane", target="", statu
 
 @app.route('/logs', methods=['GET'])
 def get_logs():
-    tf = request.args.get('type',''); sf = request.args.get('status',''); nf = request.args.get('node',''); q = request.args.get('q','').lower()
-    r = event_logs[:]
-    if tf: r = [l for l in r if l['type']==tf]
-    if sf: r = [l for l in r if l['status']==sf]
-    if nf: r = [l for l in r if nf in l['sourceNode'] or nf in l['targetNode']]
-    if q:  r = [l for l in r if q in l['summary'].lower() or q in l['detail'].lower()]
+    tf=request.args.get('type',''); sf=request.args.get('status',''); nf=request.args.get('node',''); q=request.args.get('q','').lower()
+    r=event_logs[:]
+    if tf: r=[l for l in r if l['type']==tf]
+    if sf: r=[l for l in r if l['status']==sf]
+    if nf: r=[l for l in r if nf in l['sourceNode'] or nf in l['targetNode']]
+    if q:  r=[l for l in r if q in l['summary'].lower() or q in l['detail'].lower()]
     return jsonify(list(reversed(r[-200:])))
 
 @app.route('/logs/add', methods=['POST'])
 def add_log():
-    data = request.get_json(force=True, silent=True) or {}
-    entry = push_log(type_=data.get('type','system'), summary=data.get('summary',''),
-        detail=data.get('detail',''), source=data.get('sourceNode','unknown'),
-        target=data.get('targetNode',''), status=data.get('status','info'), trace_id=data.get('traceId',''))
+    data=request.get_json(force=True,silent=True) or {}
+    entry=push_log(type_=data.get('type','system'),summary=data.get('summary',''),
+        detail=data.get('detail',''),source=data.get('sourceNode','unknown'),
+        target=data.get('targetNode',''),status=data.get('status','info'),trace_id=data.get('traceId',''))
     return jsonify(entry), 201
 
 @app.route('/logs/clear', methods=['POST'])
 def clear_logs():
-    global event_logs; event_logs = []
+    global event_logs; event_logs=[]
     return jsonify({"ok": True})
 
-# ── MESH ANNOUNCE (push dai nodi) ─────────────────────────
+# ── MESH ANNOUNCE ─────────────────────────────────────────────
 @app.route('/mesh/announce', methods=['POST'])
 def mesh_announce():
+    """I nodi chiamano questo endpoint per auto-registrarsi.
+    Deduplicazione per node_id: mantiene l'endpoint migliore (https > http > interno).
+    """
     data = request.get_json(force=True, silent=True) or {}
     ep   = data.get("endpoint", "").strip().rstrip("/")
-    nid  = data.get("node_id", "")[:16]
-    if not ep or not data.get("node_id"):
-        return jsonify({"ok": False, "error": "missing endpoint or node_id"}), 400
-    _mesh_nodes[ep] = {**data, "status": "active",
-                       "last_seen": datetime.utcnow().isoformat(timespec="seconds") + "Z"}
-    _known_endpoints.add(ep)
-    push_log('mesh_event', f'Node announced: {nid}',
-             f'endpoint={ep} tier={data.get("tier","?")}',
-             source=nid, status='success')
-    return jsonify({"ok": True, "registered": ep})
+    nid  = data.get("node_id", "")
 
-# ── MESH NODE API ─────────────────────────────────────────
+    if not ep or not nid:
+        return jsonify({"ok": False, "error": "missing endpoint or node_id"}), 400
+
+    existing = _nodes_by_id.get(nid)
+    should_update = True
+
+    if existing:
+        existing_ep = existing.get("endpoint", "")
+        # Non degradare da https a endpoint interno
+        if existing_ep.startswith("https://") and not ep.startswith("https://"):
+            should_update = False
+
+    if should_update:
+        _nodes_by_id[nid] = {
+            **data,
+            "status":    "active",
+            "last_seen": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        }
+        _known_endpoints.add(ep)
+
+    push_log('mesh_event', f'Node announced: {nid[:12]}',
+             f'endpoint={ep} tier={data.get("tier","?")} accepted={should_update}',
+             source=nid[:12], status='success')
+
+    return jsonify({"ok": True, "registered": ep, "accepted": should_update})
+
+# ── MESH NODE API ─────────────────────────────────────────────
 @app.route('/mesh/nodes', methods=['GET'])
 def get_mesh_nodes():
-    return jsonify(list(_mesh_nodes.values()))
+    return jsonify(_node_list())
 
 @app.route('/mesh/node/<path:endpoint>/status', methods=['GET'])
 def get_node_status(endpoint):
     try:
-        url = endpoint if endpoint.startswith('http') else f'http://{endpoint}'
-        r = requests.get(f"{url}/status", timeout=3)
+        r=requests.get(f"{_ep_to_url(endpoint)}/status",timeout=3)
         return jsonify(r.json())
     except Exception as e:
         return jsonify({"error": str(e), "endpoint": endpoint}), 503
@@ -116,8 +171,7 @@ def get_node_status(endpoint):
 @app.route('/mesh/node/<path:endpoint>/peers', methods=['GET'])
 def get_node_peers(endpoint):
     try:
-        url = endpoint if endpoint.startswith('http') else f'http://{endpoint}'
-        r = requests.get(f"{url}/peers", timeout=3)
+        r=requests.get(f"{_ep_to_url(endpoint)}/peers",timeout=3)
         return jsonify(r.json())
     except Exception as e:
         return jsonify({"error": str(e), "endpoint": endpoint}), 503
@@ -126,21 +180,21 @@ def get_node_peers(endpoint):
 def hb_status():
     return jsonify(dict(hb_state))
 
-# ── CONFIG API ─────────────────────────────────────────────
+# ── CONFIG API ────────────────────────────────────────────────
 @app.route('/config/advanced', methods=['GET'])
 def get_advanced_config():
-    safe = json.loads(json.dumps(advanced_config))
-    if safe["security"]["sharedSecret"]: safe["security"]["sharedSecret"] = "***"
+    safe=json.loads(json.dumps(advanced_config))
+    if safe["security"]["sharedSecret"]: safe["security"]["sharedSecret"]="***"
     return jsonify(safe)
 
 @app.route('/config/advanced', methods=['POST'])
 def set_advanced_config():
-    global advanced_config, OLLAMA_URL, DEFAULT_MODEL
-    data = request.get_json(force=True, silent=True) or {}
+    global advanced_config,OLLAMA_URL,DEFAULT_MODEL
+    data=request.get_json(force=True,silent=True) or {}
     sec=data.get('security',{}); mesh=data.get('mesh',{}); ollama=data.get('ollama',{}); auth=data.get('_authority',{})
     if 'sharedSecret' in sec and sec['sharedSecret'] not in ('','***'):
-        advanced_config['security']['sharedSecret']   = sec['sharedSecret']
-        advanced_config['security']['secretRotatedAt'] = datetime.utcnow().isoformat()
+        advanced_config['security']['sharedSecret']=sec['sharedSecret']
+        advanced_config['security']['secretRotatedAt']=datetime.utcnow().isoformat()
     if 'url' in ollama: advanced_config['ollama']['url']=ollama['url']; OLLAMA_URL=ollama['url']
     if 'defaultModel' in ollama: advanced_config['ollama']['defaultModel']=ollama['defaultModel']; DEFAULT_MODEL=ollama['defaultModel']
     if 'nodeEndpoints' in mesh:
@@ -153,23 +207,23 @@ def set_advanced_config():
 
 @app.route('/config/secret/rotate', methods=['POST'])
 def rotate_secret():
-    new_secret = str(uuid.uuid4()).replace('-','')
-    advanced_config['security']['sharedSecret']   = new_secret
-    advanced_config['security']['secretRotatedAt'] = datetime.utcnow().isoformat()
+    new_secret=str(uuid.uuid4()).replace('-','')
+    advanced_config['security']['sharedSecret']=new_secret
+    advanced_config['security']['secretRotatedAt']=datetime.utcnow().isoformat()
     push_log('system','Shared secret rotated',status='success')
     return jsonify({"ok":True,"secret":new_secret,"rotatedAt":advanced_config['security']['secretRotatedAt']})
 
 @app.route('/ollama/status', methods=['GET'])
 def ollama_status():
-    url = advanced_config['ollama']['url']
+    url=advanced_config['ollama']['url']
     try:
-        r = requests.get(f"{url}/api/tags", timeout=3)
-        models = [m['name'] for m in r.json().get('models',[])]
+        r=requests.get(f"{url}/api/tags",timeout=3)
+        models=[m['name'] for m in r.json().get('models',[])]
         return jsonify({"ok":True,"url":url,"models":models})
     except Exception as e:
         return jsonify({"ok":False,"url":url,"error":str(e)})
 
-# ── TASK API ──────────────────────────────────────────────
+# ── TASK API ──────────────────────────────────────────────────
 @app.route('/task/create', methods=['POST'])
 def create_task():
     data=request.get_json(force=True,silent=True) or {}
@@ -183,28 +237,45 @@ def create_task():
 def assign_task():
     data=request.get_json(force=True,silent=True) or {}
     task_id=data.get('task_id')
-    if not task_id or task_id not in tasks: return jsonify({"error":"Task not found"}), 404
-    active=[n for n in _mesh_nodes.values() if n.get("status")=="active"]
-    if not active: return jsonify({"error":"No active nodes in mesh"}), 503
-    selected=active[0]; endpoint=selected["endpoint"]; node_id=selected["node_id"]
-    task=tasks[task_id]; task["status"]="assigned"; task["node"]=node_id
-    tid=str(uuid.uuid4())[:8]
-    push_log('inter_node_message',f'Task {task_id} → {node_id}',json.dumps(task),target=node_id,status='pending',trace_id=tid)
+    if not task_id or task_id not in tasks:
+        return jsonify({"error":"Task not found"}), 404
+
+    active=[n for n in _node_list() if n.get("status")=="active"]
+    if not active:
+        return jsonify({"error":"No active nodes in mesh"}), 503
+
+    # Preferisci nodi con endpoint pubblico (https://)
+    public_nodes = [n for n in active if _best_endpoint(n).startswith("https://")]
+    selected = public_nodes[0] if public_nodes else active[0]
+
+    endpoint = _best_endpoint(selected)
+    node_id  = selected["node_id"]
+    task     = tasks[task_id]
+    task["status"]   = "assigned"
+    task["node"]     = node_id
+    task["endpoint"] = endpoint
+    tid = str(uuid.uuid4())[:8]
+
+    push_log('inter_node_message', f'Task {task_id} → {node_id[:12]}',
+             f'endpoint={endpoint}', target=node_id[:12], status='pending', trace_id=tid)
     try:
-        url=endpoint if endpoint.startswith('http') else f'http://{endpoint}'
-        r=requests.post(f"{url}/execute",json=task,timeout=120)
-        task["result"]=r.json(); task["status"]="done"
-        push_log('inter_node_message',f'Task {task_id} done on {node_id}',json.dumps(task.get("result",{})),
-                 source=node_id,target='control-plane',status='success',trace_id=tid)
+        url = _ep_to_url(endpoint)
+        r   = requests.post(f"{url}/execute", json=task, timeout=120)
+        task["result"] = r.json()
+        task["status"] = "done"
+        push_log('inter_node_message', f'Task {task_id} done on {node_id[:12]}',
+                 json.dumps(task.get("result",{})),
+                 source=node_id[:12], target='control-plane', status='success', trace_id=tid)
     except Exception as e:
-        push_log('inter_node_message',f'Task {task_id} failed on {node_id}',str(e),source=node_id,status='failed',trace_id=tid)
-        return jsonify({"error":str(e)}), 500
+        push_log('inter_node_message', f'Task {task_id} failed on {node_id[:12]}',
+                 str(e), source=node_id[:12], status='failed', trace_id=tid)
+        return jsonify({"error": str(e)}), 500
     return jsonify({"message":"done","task":task})
 
 @app.route('/tasks')
 def get_tasks(): return jsonify(tasks)
 
-# ── HEARTBEAT ─────────────────────────────────────────────
+# ── HEARTBEAT ─────────────────────────────────────────────────
 DREAM_PHRASES = [
     "autonomous planning cycle initiated","memory consolidation phase started",
     "sub-task decomposition in progress","latent space exploration #{}",
@@ -221,44 +292,67 @@ CHAT_PHRASES = [
     ("resource usage?","cpu {}% — within limits"),
 ]
 
-def _ep_to_url(ep):
-    return ep.rstrip("/") if ep.startswith("http") else f"http://{ep}"
-
 def _poll_mesh_nodes():
-    discovered = set()
+    """Interroga /status di ogni endpoint noto.
+    Aggiorna _nodes_by_id (deduplicato per node_id).
+    Skippa endpoint interni se il nodo ha già un URL pubblico.
+    """
+    discovered = []
     for ep in list(_known_endpoints):
+        # Skippa endpoint interni Docker (es. node:8084) se abbiamo già
+        # un endpoint pubblico per quel nodo
+        if not _is_public_ep(ep):
+            # Verifica se abbiamo già questo nodo con endpoint pubblico
+            already_public = any(
+                _is_public_ep(n.get("endpoint",""))
+                for n in _nodes_by_id.values()
+                if n.get("endpoint","") != ep
+            )
+            if already_public:
+                continue
         try:
-            r = requests.get(f"{_ep_to_url(ep)}/status", timeout=3)
-            if r.status_code == 200:
-                info = r.json()
+            r=requests.get(f"{_ep_to_url(ep)}/status",timeout=3)
+            if r.status_code==200:
+                info=r.json()
+                nid=info.get("node_id","")
                 info["endpoint"]  = ep
                 info["status"]    = "active"
                 info["last_seen"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-                _mesh_nodes[ep]   = info
-                discovered.add(ep)
+                if nid:
+                    existing=_nodes_by_id.get(nid)
+                    # Non degradare da https a endpoint interno
+                    if not existing or not existing.get("endpoint","").startswith("https://") or ep.startswith("https://"):
+                        _nodes_by_id[nid]=info
+                discovered.append(info)
+                # PEX leggero
                 try:
-                    rp = requests.get(f"{_ep_to_url(ep)}/peers", timeout=2)
+                    rp=requests.get(f"{_ep_to_url(ep)}/peers",timeout=2)
                     for peer in rp.json().get("peers",[]):
-                        pep = peer.get("endpoint","")
-                        if pep and pep not in _mesh_nodes: _known_endpoints.add(pep)
+                        pep=peer.get("endpoint","")
+                        if pep and pep not in _known_endpoints:
+                            _known_endpoints.add(pep)
                 except Exception: pass
         except Exception:
-            if ep in _mesh_nodes: _mesh_nodes[ep]["status"] = "unreachable"
-    return [_mesh_nodes[ep] for ep in discovered]
+            # Marca come unreachable solo se è il nostro endpoint canonico
+            for nid,n in _nodes_by_id.items():
+                if n.get("endpoint")==ep:
+                    _nodes_by_id[nid]["status"]="unreachable"
+    return discovered
 
 def heartbeat_loop():
     time.sleep(3)
     push_log('system','Control-plane v0.2 started',detail=f'nodes={list(_known_endpoints)}',status='info')
-    hb_state["running"] = True
+    hb_state["running"]=True
     while True:
-        cycle = hb_state["cycle"] + 1
-        hb_state["cycle"]     = cycle
-        hb_state["last_tick"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-        active = _poll_mesh_nodes()
-        hb_state["nodes_seen"] = [n.get("node_id",n.get("endpoint","?"))[:12] for n in active]
-        for node in active:
+        cycle=hb_state["cycle"]+1
+        hb_state["cycle"]=cycle
+        hb_state["last_tick"]=datetime.utcnow().isoformat(timespec="seconds")+"Z"
+        active=_poll_mesh_nodes()
+        hb_state["nodes_seen"]=[n.get("node_id",n.get("endpoint","?"))[:12] for n in _node_list() if n.get("status")=="active"]
+        for node in _node_list():
+            if node.get("status")!="active": continue
             nid=node.get("node_id",node.get("endpoint","unknown"))[:12]
-            ep=node.get("endpoint","")
+            ep=_best_endpoint(node)
             tid=str(uuid.uuid4())[:8]
             try:
                 t0=time.time(); requests.get(f"{_ep_to_url(ep)}/health",timeout=2)
@@ -268,16 +362,16 @@ def heartbeat_loop():
                          source='control-plane',target=nid,status='success',trace_id=tid)
                 hb_state["last_conn"]=hb_state["last_tick"]
             except Exception as e:
-                push_log('connection_test',f'HB#{cycle} ping FAILED → {nid}',str(e),
-                         source='control-plane',target=nid,status='failed',trace_id=tid)
+                push_log('connection_test',f'HB#{cycle} ping FAILED → {nid}',
+                         str(e),source='control-plane',target=nid,status='failed',trace_id=tid)
         if cycle%3==0:
-            pool=[n.get("node_id",n.get("endpoint","node-sim"))[:16] for n in active] or ["node-sim"]
+            pool=[n.get("node_id",n.get("endpoint","node-sim"))[:16] for n in _node_list()] or ["node-sim"]
             nid=random.choice(pool)
             push_log('dream',f'{nid}: {random.choice(DREAM_PHRASES).format(random.randint(1,99))}',
                      f'cycle={cycle}',source=nid,status='info')
             hb_state["last_dream"]=hb_state["last_tick"]
         if cycle%5==0:
-            pool=[n.get("node_id",n.get("endpoint",""))[:16] for n in active]
+            pool=[n.get("node_id",n.get("endpoint",""))[:16] for n in _node_list()]
             if len(pool)<2: pool=(pool+["node-sim"])[:2]
             src,dst=random.sample(pool,2)
             q,a_tpl=random.choice(CHAT_PHRASES)
@@ -288,7 +382,7 @@ def heartbeat_loop():
             hb_state["last_chat"]=hb_state["last_tick"]
         time.sleep(15)
 
-# ── DASHBOARD ──────────────────────────────────────────────
+# ── DASHBOARD ─────────────────────────────────────────────────
 DASHBOARD_HTML = r"""<!DOCTYPE html>
 <html lang="it" data-theme="dark">
 <head>
