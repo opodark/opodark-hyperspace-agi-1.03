@@ -491,11 +491,11 @@ main{padding:18px 20px;display:grid}
     HyperSpace AGI <span class="vbadge">v0.2</span>
   </div>
   <nav>
-    <button class="active" onclick="showPanel('nodes',this)">🌐 Mesh Nodes</button>
-    <button onclick="showPanel('tasks',this)">🚀 Tasks</button>
-    <button onclick="showPanel('logs',this)">📋 Logs</button>
-    <button onclick="showPanel('diag',this)">🔧 Diagnostics</button>
-    <button onclick="showPanel('setup',this)">⚙️ Setup</button>
+    <button class="active" onclick="showPanel('nodes',this)">&#127760; Mesh Nodes</button>
+    <button onclick="showPanel('tasks',this)">&#128640; Tasks</button>
+    <button onclick="showPanel('logs',this)">&#128203; Logs</button>
+    <button onclick="showPanel('diag',this)">&#128295; Diagnostics</button>
+    <button onclick="showPanel('setup',this)">&#9881;&#65039; Setup</button>
   </nav>
   <div class="hdr-right">
     <div class="ollama-pill" onclick="openOllamaModal()"><span class="ollama-dot" id="ollamaDot"></span><span id="ollamaLabel">Ollama</span></div>
@@ -504,41 +504,41 @@ main{padding:18px 20px;display:grid}
   </div>
 </header>
 <div id="hbBar">
-  <div class="hb-item"><span class="hb-dot" id="hbDot"></span><span class="hb-label">HB</span><span class="hb-val" id="hbCycle">—</span></div>
-  <div class="hb-item"><span class="hb-label">Tick</span><span class="hb-val" id="hbTick">—</span></div>
-  <div class="hb-item"><span class="hb-label">Nodes</span><span class="hb-val" id="hbNodes">—</span></div>
-  <div class="hb-item"><span class="hb-label">Last conn</span><span class="hb-val" id="hbConn">—</span></div>
-  <div class="hb-item"><span class="hb-label">Last dream</span><span class="hb-val" id="hbDream">—</span></div>
-  <span class="hb-live" style="margin-left:auto">● LIVE</span>
+  <div class="hb-item"><span class="hb-dot" id="hbDot"></span><span class="hb-label">HB</span><span class="hb-val" id="hbCycle">&#8212;</span></div>
+  <div class="hb-item"><span class="hb-label">Tick</span><span class="hb-val" id="hbTick">&#8212;</span></div>
+  <div class="hb-item"><span class="hb-label">Nodes</span><span class="hb-val" id="hbNodes">&#8212;</span></div>
+  <div class="hb-item"><span class="hb-label">Last conn</span><span class="hb-val" id="hbConn">&#8212;</span></div>
+  <div class="hb-item"><span class="hb-label">Last dream</span><span class="hb-val" id="hbDream">&#8212;</span></div>
+  <span class="hb-live" style="margin-left:auto">&#9679; LIVE</span>
 </div>
 <main>
 
 <!-- PANEL: NODES -->
 <div id="panel-nodes" class="panel active">
-  <div class="sec-title">Mesh Nodes — Live</div>
-  <div class="row"><button class="btn btn-ghost btn-sm" onclick="refreshNodes()">↺ Refresh</button><span style="font-size:.7rem;color:var(--text-muted)" id="nodesCount"></span></div>
-  <div class="nodes-grid" id="nodesGrid"><div class="nodes-empty">Loading nodes…</div></div>
+  <div class="sec-title">Mesh Nodes &#8212; Live</div>
+  <div class="row"><button class="btn btn-ghost btn-sm" onclick="refreshNodes()">&#8634; Refresh</button><span style="font-size:.7rem;color:var(--text-muted)" id="nodesCount"></span></div>
+  <div class="nodes-grid" id="nodesGrid"><div class="nodes-empty">Loading nodes&#8230;</div></div>
 </div>
 
 <!-- PANEL: TASKS -->
 <div id="panel-tasks" class="panel">
   <div class="sec-title">Task History</div>
   <div class="card">
-    <div class="card-title">🚀 Nuovo Task</div>
+    <div class="card-title">&#128640; Nuovo Task</div>
     <div class="task-form">
       <div class="fg"><label class="label">Task ID</label><input id="tId" class="inp inp-mono" placeholder="task-001"/></div>
       <div class="fg"><label class="label">Modello</label><input id="tModel" class="inp inp-mono" placeholder="phi3" value="phi3"/></div>
       <div class="fg" style="grid-column:span 2"><label class="label">Prompt</label><textarea id="tPrompt" class="inp" rows="3" placeholder="Scrivi il prompt..." style="resize:vertical"></textarea></div>
     </div>
     <div class="row" style="margin-top:10px">
-      <button class="btn btn-primary" onclick="createAndAssign()">▶ Esegui</button>
+      <button class="btn btn-primary" onclick="createAndAssign()">&#9654; Esegui</button>
       <button class="btn btn-ghost" onclick="createTask()">Solo crea</button>
       <span class="task-status-label" id="taskStatus"></span>
     </div>
   </div>
   <div class="row" style="justify-content:space-between">
     <span style="font-size:.7rem;color:var(--text-muted)" id="taskCount">0 tasks</span>
-    <button class="btn btn-ghost btn-sm" onclick="refreshTaskHistory()">↺ Refresh</button>
+    <button class="btn btn-ghost btn-sm" onclick="refreshTaskHistory()">&#8634; Refresh</button>
   </div>
   <div id="taskHistory"><div class="tasks-empty">Nessun task ancora.</div></div>
 </div>
@@ -548,24 +548,24 @@ main{padding:18px 20px;display:grid}
   <div class="sec-title">Log Viewer</div>
   <div class="log-tabs">
     <button class="lt active" onclick="setTab('',this)">All</button>
-    <button class="lt" onclick="setTab('connection_test',this)">🔌 Connection</button>
-    <button class="lt" onclick="setTab('inter_node_message',this)">📡 Node Comm</button>
-    <button class="lt" onclick="setTab('dream',this)">💭 Dreams</button>
-    <button class="lt" onclick="setTab('node_chat',this)">💬 Chat</button>
-    <button class="lt" onclick="setTab('mesh_event',this)">🌐 Mesh</button>
-    <button class="lt" onclick="setTab('system',this)">⚙️ System</button>
+    <button class="lt" onclick="setTab('connection_test',this)">&#128268; Connection</button>
+    <button class="lt" onclick="setTab('inter_node_message',this)">&#128225; Node Comm</button>
+    <button class="lt" onclick="setTab('dream',this)">&#128173; Dreams</button>
+    <button class="lt" onclick="setTab('node_chat',this)">&#128172; Chat</button>
+    <button class="lt" onclick="setTab('mesh_event',this)">&#127760; Mesh</button>
+    <button class="lt" onclick="setTab('system',this)">&#9881;&#65039; System</button>
   </div>
   <div class="filter-row">
     <input class="inp" id="fNode" placeholder="Filter node..." oninput="refreshLogs()" style="width:150px"/>
     <select class="sel" id="fStatus" onchange="refreshLogs()"><option value="">All</option><option>success</option><option>failed</option><option>warning</option><option>pending</option><option>info</option></select>
-    <input class="inp" id="fQ" placeholder="🔍 Search..." oninput="refreshLogs()" style="flex:1;min-width:140px"/>
+    <input class="inp" id="fQ" placeholder="Search..." oninput="refreshLogs()" style="flex:1;min-width:140px"/>
     <label style="display:flex;align-items:center;gap:5px;font-size:.72rem;color:var(--text-muted);cursor:pointer"><input type="checkbox" id="autoScroll" checked> Auto-scroll</label>
     <button class="btn btn-danger btn-sm" onclick="clearLogs()">Clear</button>
   </div>
   <div class="log-wrap">
     <div class="log-thead"><span>Timestamp</span><span>Type</span><span>Source</span><span>Target</span><span>Status</span><span>Summary</span></div>
     <div class="log-body" id="logBody"><div class="log-empty">No events yet.</div></div>
-    <div class="log-footer"><span class="pulse"></span><span id="logCount">0 events</span><span style="margin-left:auto" id="logLast">—</span></div>
+    <div class="log-footer"><span class="pulse"></span><span id="logCount">0 events</span><span style="margin-left:auto" id="logLast">&#8212;</span></div>
   </div>
 </div>
 
@@ -573,43 +573,43 @@ main{padding:18px 20px;display:grid}
 <div id="panel-diag" class="panel">
   <div class="sec-title">Diagnostics</div>
   <div class="diag-grid">
-    <div class="card"><div class="card-title">📡 Mesh Nodes Raw</div><button class="btn btn-ghost btn-sm" onclick="diagMeshNodes()">Fetch</button><div class="diag-out" id="dMesh">—</div></div>
-    <div class="card"><div class="card-title">🤖 Ollama Status</div><button class="btn btn-success btn-sm" onclick="checkOllama()">Check</button><div class="diag-out" id="dOllama">—</div></div>
-    <div class="card"><div class="card-title">💭 Simulate Dream</div>
+    <div class="card"><div class="card-title">&#128225; Mesh Nodes Raw</div><button class="btn btn-ghost btn-sm" onclick="diagMeshNodes()">Fetch</button><div class="diag-out" id="dMesh">&#8212;</div></div>
+    <div class="card"><div class="card-title">&#129302; Ollama Status</div><button class="btn btn-success btn-sm" onclick="checkOllama()">Check</button><div class="diag-out" id="dOllama">&#8212;</div></div>
+    <div class="card"><div class="card-title">&#128173; Simulate Dream</div>
       <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:8px"><input id="drNode" class="inp inp-mono" placeholder="node-id" style="width:120px"/><input id="drText" class="inp" placeholder="Dream text..." style="flex:1"/></div>
-      <button class="btn btn-dream btn-sm" onclick="sendDream()">Send Dream</button><div class="diag-out" id="dDream">—</div>
+      <button class="btn btn-dream btn-sm" onclick="sendDream()">Send Dream</button><div class="diag-out" id="dDream">&#8212;</div>
     </div>
-    <div class="card"><div class="card-title">💬 Simulate Chat</div>
+    <div class="card"><div class="card-title">&#128172; Simulate Chat</div>
       <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:8px"><input id="chFrom" class="inp inp-mono" placeholder="from" style="width:90px"/><input id="chTo" class="inp inp-mono" placeholder="to" style="width:90px"/><input id="chMsg" class="inp" placeholder="Message..." style="flex:1"/></div>
-      <button class="btn btn-chat btn-sm" onclick="sendChat()">Send Chat</button><div class="diag-out" id="dChat">—</div>
+      <button class="btn btn-chat btn-sm" onclick="sendChat()">Send Chat</button><div class="diag-out" id="dChat">&#8212;</div>
     </div>
-    <div class="card"><div class="card-title">⚙️ HB Status</div><button class="btn btn-ghost btn-sm" onclick="checkHb()">Refresh</button><div class="diag-out" id="dHb">—</div></div>
-    <div class="card"><div class="card-title">📊 Ping All Nodes</div><button class="btn btn-ghost btn-sm" onclick="pingAll()">Ping All</button><div class="diag-out" id="dPing">—</div></div>
+    <div class="card"><div class="card-title">&#9881;&#65039; HB Status</div><button class="btn btn-ghost btn-sm" onclick="checkHb()">Refresh</button><div class="diag-out" id="dHb">&#8212;</div></div>
+    <div class="card"><div class="card-title">&#128202; Ping All Nodes</div><button class="btn btn-ghost btn-sm" onclick="pingAll()">Ping All</button><div class="diag-out" id="dPing">&#8212;</div></div>
   </div>
 </div>
 
 <!-- PANEL: SETUP -->
 <div id="panel-setup" class="panel">
   <div class="sec-title">Setup</div>
-  <div class="card"><div class="card-title">🤖 Ollama</div>
+  <div class="card"><div class="card-title">&#129302; Ollama</div>
     <div class="setup-grid">
       <div class="fg"><label class="label">Ollama URL</label><input id="oUrl" class="inp inp-mono"/></div>
       <div class="fg"><label class="label">Default Model</label><input id="oModel" class="inp inp-mono"/></div>
     </div>
   </div>
-  <div class="card"><div class="card-title">🌐 Mesh Node Endpoints</div>
+  <div class="card"><div class="card-title">&#127760; Mesh Node Endpoints</div>
     <div class="fg">
       <label class="label">Node Endpoints (uno per riga)</label>
       <textarea id="meshEps" class="inp" rows="4" style="resize:vertical"></textarea>
       <span class="hint">Es: node:8084 oppure https://xxxx.ngrok-free.dev</span>
     </div>
   </div>
-  <div class="card"><div class="card-title">🔑 Security</div>
+  <div class="card"><div class="card-title">&#128273; Security</div>
     <div class="fg"><label class="label">Shared Secret</label>
       <div style="display:flex;gap:7px">
         <input id="secVal" type="password" class="inp inp-mono" placeholder="Leave blank to keep"/>
         <button class="btn btn-ghost btn-sm" onclick="toggleSec(this)">Show</button>
-        <button class="btn btn-warn btn-sm" onclick="rotateSecret()">↻ Rotate</button>
+        <button class="btn btn-warn btn-sm" onclick="rotateSecret()">&#8635; Rotate</button>
       </div>
       <span class="hint" id="rsAt"></span>
     </div>
@@ -620,16 +620,16 @@ main{padding:18px 20px;display:grid}
       <span>Legacy: Authority Server</span>
     </div>
     <div class="legacy-body" id="legacyBody">
-      <div class="legacy-warn">⚠️ L'authority è mantenuta per compatibilità.</div>
+      <div class="legacy-warn">&#9888;&#65039; L'authority e' mantenuta per compatibilita'.</div>
       <div class="setup-grid">
         <div class="fg"><label class="label">Authority URL</label><input id="aUrl" class="inp inp-mono"/></div>
-        <div class="fg" style="align-self:end"><button class="btn btn-ghost btn-sm" onclick="testAuthority()">🔌 Test</button><div class="diag-out" id="sAuthTest" style="margin-top:6px;min-height:32px"></div></div>
+        <div class="fg" style="align-self:end"><button class="btn btn-ghost btn-sm" onclick="testAuthority()">&#128268; Test</button><div class="diag-out" id="sAuthTest" style="margin-top:6px;min-height:32px"></div></div>
       </div>
     </div>
   </div>
   <div class="setup-footer">
-    <button class="btn btn-ghost" onclick="loadCfg()">↺ Reset</button>
-    <button class="btn btn-primary" onclick="saveCfg()">💾 Save</button>
+    <button class="btn btn-ghost" onclick="loadCfg()">&#8634; Reset</button>
+    <button class="btn btn-primary" onclick="saveCfg()">&#128190; Save</button>
   </div>
   <div id="saveMsg"></div>
 </div>
@@ -639,11 +639,11 @@ main{padding:18px 20px;display:grid}
 <!-- MODAL OLLAMA -->
 <div class="modal-overlay" id="ollamaModal" onclick="if(event.target===this)closeModal()">
   <div class="modal">
-    <div class="modal-title"><span class="ollama-dot" id="modalDot"></span>🤖 Ollama<button class="modal-close" onclick="closeModal()">✕ Close</button></div>
+    <div class="modal-title"><span class="ollama-dot" id="modalDot"></span>&#129302; Ollama<button class="modal-close" onclick="closeModal()">&#10005; Close</button></div>
     <div id="modalUrl" style="font-size:.7rem;color:var(--text-muted);font-family:var(--font-mono);margin-bottom:8px"></div>
     <div class="model-list" id="modelList"></div>
     <div id="modalErr" style="font-size:.72rem;color:var(--error);display:none"></div>
-    <button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="checkOllamaModal()">↺ Refresh</button>
+    <button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="checkOllamaModal()">&#8634; Refresh</button>
   </div>
 </div>
 
@@ -674,7 +674,7 @@ setInterval(refreshHbBar,5000);refreshHbBar();
 function tierClass(t){return t==='root'?'tier-root':t==='hub'?'tier-hub':'tier-leaf';}
 function statusDotClass(s){return s==='active'?'active':s==='unreachable'?'unreachable':'unknown';}
 function formatUptime(s){if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';return Math.floor(s/3600)+'h '+Math.floor((s%3600)/60)+'m';}
-async function refreshNodes(){try{const nodes=await(await fetch('/mesh/nodes')).json();const grid=document.getElementById('nodesGrid');document.getElementById('nodesCount').textContent=nodes.length+' node'+(nodes.length!==1?'s':'');if(!nodes.length){grid.innerHTML='<div class="nodes-empty">No nodes discovered yet.</div>';return;}grid.innerHTML=nodes.map(n=>{const nid=n.node_id?n.node_id.slice(0,16)+'\u2026':n.endpoint||'?';const tier=n.tier||'leaf';const uptime=n.uptime_s?formatUptime(n.uptime_s):'?';const caps=(n.capabilities||[]).join(', ')||'?';const ver=n.version||'?';const ep=n.endpoint||'';return`<div class="node-card"><div class="nc-header"><span class="node-status-dot ${statusDotClass(n.status)}"></span><span class="node-id" title="${n.node_id||''}">💻 ${nid}</span><span class="tier-badge ${tierClass(tier)}">${tier}</span></div><div class="node-meta"><span class="nm-label">Endpoint</span><span class="nm-val" title="${ep}">${ep.replace('https://','').slice(0,30)}</span><span class="nm-label">Version</span><span class="nm-val">${ver}</span><span class="nm-label">Uptime</span><span class="nm-val">${uptime}</span><span class="nm-label">Peers</span><span class="nm-val">${n.peers_active||0} active</span><span class="nm-label">Caps</span><span class="nm-val">${caps}</span><span class="nm-label">VRAM</span><span class="nm-val">${n.vram_gb||0} GB</span></div><div class="node-peers"><span style="color:var(--text-faint);margin-right:4px">pubkey</span><span class="peer-tag" title="${n.public_key||''}">${(n.public_key||'').slice(0,20)}&hellip;</span></div></div>`;}).join('');}catch(e){document.getElementById('nodesGrid').innerHTML='<div class="nodes-empty">Error: '+e.message+'</div>';}}
+async function refreshNodes(){try{const nodes=await(await fetch('/mesh/nodes')).json();const grid=document.getElementById('nodesGrid');document.getElementById('nodesCount').textContent=nodes.length+' node'+(nodes.length!==1?'s':'');if(!nodes.length){grid.innerHTML='<div class="nodes-empty">No nodes discovered yet.</div>';return;}grid.innerHTML=nodes.map(n=>{const nid=n.node_id?n.node_id.slice(0,16)+'\u2026':n.endpoint||'?';const tier=n.tier||'leaf';const uptime=n.uptime_s?formatUptime(n.uptime_s):'?';const caps=(n.capabilities||[]).join(', ')||'?';const ver=n.version||'?';const ep=n.endpoint||'';return`<div class="node-card"><div class="nc-header"><span class="node-status-dot ${statusDotClass(n.status)}"></span><span class="node-id" title="${n.node_id||''}">&#128187; ${nid}</span><span class="tier-badge ${tierClass(tier)}">${tier}</span></div><div class="node-meta"><span class="nm-label">Endpoint</span><span class="nm-val" title="${ep}">${ep.replace('https://','').slice(0,30)}</span><span class="nm-label">Version</span><span class="nm-val">${ver}</span><span class="nm-label">Uptime</span><span class="nm-val">${uptime}</span><span class="nm-label">Peers</span><span class="nm-val">${n.peers_active||0} active</span><span class="nm-label">Caps</span><span class="nm-val">${caps}</span><span class="nm-label">VRAM</span><span class="nm-val">${n.vram_gb||0} GB</span></div><div class="node-peers"><span style="color:var(--text-faint);margin-right:4px">pubkey</span><span class="peer-tag" title="${n.public_key||''}">${(n.public_key||'').slice(0,20)}&hellip;</span></div></div>`;}).join('');}catch(e){document.getElementById('nodesGrid').innerHTML='<div class="nodes-empty">Error: '+e.message+'</div>';}}
 setInterval(refreshNodes,15000);refreshNodes();
 
 // ── TASKS ──
@@ -703,7 +703,7 @@ function renderTaskCard(t){
       ${statusBadge(status)}
       <span class="task-id">#${escH(id)}</span>
       <span class="task-model-badge">${escH(model)}</span>
-      <span class="task-node" title="${escH(t.node||'')}">${node?'\uD83D\uDCBB '+node+'\u2026':''}</span>
+      <span class="task-node" title="${escH(t.node||'')}">${node?'&#128187; '+node+'\u2026':''}</span>
       <span class="task-ts">${escH(ts)}</span>
     </div>
     <div class="task-body" id="tb-${escH(id)}">
@@ -773,7 +773,7 @@ function renderLogs(logs){
   document.getElementById('logCount').textContent=logs.length+' events';
   document.getElementById('logLast').textContent='Updated '+new Date().toISOString().slice(11,19)+' UTC';
   if(!logs.length){body.innerHTML='<div class="log-empty">No events.</div>';return;}
-  const stEmoji={success:'\u2705',failed:'\u274C',warning:'⚠️',pending:'\u23F3',info:'ℹ️'};
+  const stEmoji={success:'\u2705',failed:'\u274C',warning:'\u26A0\uFE0F',pending:'\u23F3',info:'\u2139\uFE0F'};
   body.innerHTML=logs.map((l,i)=>`<div class="log-row" onclick="toggleD('ld${i}')"><span class="ts">${escH(l.ts.replace('T',' ').slice(0,19))}</span><span><span class="tbadge tb-${l.type}">${escH(l.type.replace(/_/g,'\u200B'))}</span></span><span class="nc">${escH(l.sourceNode||'\u2014')}</span><span class="nc">${escH(l.targetNode||'\u2014')}</span><span><span class="sbadge st-${l.status}">${stEmoji[l.status]||''} ${escH(l.status)}</span></span><span class="summary">${escH(l.summary)}</span></div><div class="detail-row" id="ld${i}"><b>TraceID:</b> ${escH(l.traceId)} | <b>ID:</b> ${escH(l.id)}\n<b>Detail:</b>\n${escH(l.detail||'\u2014')}</div>`).join('');
   if(document.getElementById('autoScroll').checked)body.scrollTop=body.scrollHeight;
 }
