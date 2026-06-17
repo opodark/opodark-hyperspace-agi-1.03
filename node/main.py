@@ -112,33 +112,34 @@ async def ollama_health() -> dict:
         return {"ok": False, "error": str(e)}
 
 # ── REGISTRAZIONE AL REGISTRY ─────────────────────────────
+# Il registry accetta POST /register con schema:
+# { node_id, public_address, role, metadata }
 async def register_to_registry():
-    """POST /nodes al registry di discovery."""
     payload = {
-        "node_id":      NODE_ID,
-        "public_key":   NODE_PUBKEY,
-        "tier":         NODE_PROFILE["tier"],
-        "endpoint":     NODE_ADVERTISED_ENDPOINT,
-        "capabilities": NODE_PROFILE["capabilities"],
-        "vram_gb":      VRAM_GB,
-        "version":      NODE_PROFILE["version"],
-        "uptime_s":     int(time.time() - _boot_time),
-        "peers_active": len([p for p in _peers.values() if p["status"] == "active"]),
-        "status":       "active",
+        "node_id":        NODE_ID,
+        "public_address": NODE_ADVERTISED_ENDPOINT,
+        "role":           NODE_PROFILE["tier"],
+        "metadata": {
+            "version":      NODE_PROFILE["version"],
+            "tier":         NODE_PROFILE["tier"],
+            "capabilities": ",".join(NODE_CAPABILITIES),
+            "vram_gb":      str(VRAM_GB),
+            "uptime_s":     str(int(time.time() - _boot_time)),
+            "public_key":   NODE_PUBKEY[:32],
+        }
     }
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
-            r = await client.post(f"{REGISTRY_URL}/nodes", json=payload)
+            r = await client.post(f"{REGISTRY_URL}/register", json=payload)
             if r.status_code in (200, 201):
-                print(f"[NODE:{NODE_ID[:10]}] registered to registry {REGISTRY_URL}")
+                print(f"[NODE:{NODE_ID[:10]}] registered to registry OK")
             else:
-                print(f"[NODE:{NODE_ID[:10]}] registry announce HTTP {r.status_code}: {r.text[:120]}")
+                print(f"[NODE:{NODE_ID[:10]}] registry /register HTTP {r.status_code}: {r.text[:120]}")
     except Exception as e:
-        print(f"[NODE:{NODE_ID[:10]}] registry announce failed: {e}")
+        print(f"[NODE:{NODE_ID[:10]}] registry /register failed: {e}")
 
 # ── REGISTRAZIONE AL CONTROL-PLANE ────────────────────────
 async def register_to_control_plane():
-    """POST /mesh/announce sul control-plane."""
     if not CONTROL_PLANE_URL:
         return
     payload = {
@@ -156,7 +157,7 @@ async def register_to_control_plane():
         async with httpx.AsyncClient(timeout=8.0) as client:
             r = await client.post(f"{CONTROL_PLANE_URL}/mesh/announce", json=payload)
             if r.status_code == 200:
-                print(f"[NODE:{NODE_ID[:10]}] registered to control-plane {CONTROL_PLANE_URL}")
+                print(f"[NODE:{NODE_ID[:10]}] registered to control-plane OK")
             else:
                 print(f"[NODE:{NODE_ID[:10]}] control-plane announce HTTP {r.status_code}")
     except Exception as e:
