@@ -1,11 +1,13 @@
 # control-plane/main.py
 # HyperSpace AGI v0.2 — Control Plane + Dashboard
 
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, send_from_directory
 import os, threading, time, requests, json, uuid, random
 from datetime import datetime
 
 app = Flask(__name__)
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # CONFIG
 NODE_ENDPOINTS = [e.strip() for e in os.getenv("NODE_ENDPOINTS","node:8084").split(",") if e.strip()]
@@ -313,3 +315,48 @@ def heartbeat_loop():
             ep=_best_endpoint(node); tid=str(uuid.uuid4())[:8]
             try:
                 t0=time.time(); requests.get(f"{_ep_to_url(ep)}/health",timeout=2)
+                lat=int((time.time()-t0)*1000)
+                push_log('connection_test',f'HB#{cycle} ping OK -> {nid}',
+                    f'latency: {lat}ms | endpoint: {ep}',
+                    source='control-plane',target=nid,status='success',trace_id=tid)
+                hb_state["last_conn"]=hb_state["last_tick"]
+            except Exception as e:
+                push_log('connection_test',f'HB#{cycle} ping FAILED -> {nid}',
+                    str(e),source='control-plane',target=nid,status='failed',trace_id=tid)
+        if cycle%3==0:
+            pool=[n.get("node_id","node-sim")[:16] for n in _node_list()] or ["node-sim"]
+            nid=random.choice(pool)
+            push_log('dream',f'{nid}: {random.choice(DREAM_PHRASES).format(random.randint(1,99))}',
+                f'cycle={cycle}',source=nid,status='info')
+            hb_state["last_dream"]=hb_state["last_tick"]
+        if cycle%5==0:
+            pool=[n.get("node_id","")[:16] for n in _node_list()]
+            if len(pool)<2: pool=(pool+["node-sim"])[:2]
+            src,dst=random.sample(pool,2)
+            q,a_tpl=random.choice(CHAT_PHRASES)
+            answer=a_tpl.format(random.randint(1,8))
+            tid=str(uuid.uuid4())[:8]
+            push_log('node_chat',f'{src} -> {dst}: "{q}"',f'cycle={cycle}',
+                source=src,target=dst,status='info',trace_id=tid)
+            push_log('node_chat',f'{dst} -> {src}: "{answer}"',f'reply',
+                source=dst,target=src,status='info',trace_id=tid)
+            hb_state["last_chat"]=hb_state["last_tick"]
+        time.sleep(15)
+
+# DASHBOARD — served from standalone dashboard.html file
+@app.route('/')
+def dashboard():
+    return send_from_directory(BASE_DIR, 'dashboard.html')
+
+@app.route('/dashboard')
+def dashboard_alias():
+    return send_from_directory(BASE_DIR, 'dashboard.html')
+
+# STARTUP
+if __name__ == '__main__':
+    t = threading.Thread(target=heartbeat_loop, daemon=True)
+    t.start()
+    app.run(host='0.0.0.0', port=8085, debug=False)
+else:
+    t = threading.Thread(target=heartbeat_loop, daemon=True)
+    t.start()
