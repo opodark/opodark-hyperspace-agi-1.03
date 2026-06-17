@@ -1,20 +1,43 @@
 version: '3.8'
 
 # ============================================================
-# HyperSpace AGI v0.2 — Compose Unico
+# HyperSpace AGI v1.01 — Compose Unico
 # Tutti i nodi usano la stessa immagine.
 # Il tier (root/hub/leaf) viene calcolato al boot — non hardcodato.
-# Nessuna authority container: discovery P2P tramite BOOT_PEERS + /announce.
+# Discovery dinamica tramite Registry (http://registry:8086)
+# Fallback: BOOT_PEERS P2P tramite /announce.
 #
 # Dashboard control-plane: http://localhost:8085/dashboard
+# Registry API:            http://localhost:8086/nodes
 # Node 1:                  http://localhost:8081
 # Node 2:                  http://localhost:8082
 #
-# BOOT_PEERS: ogni nodo conosce gli altri tramite nome servizio Docker.
-# Aggiungere nuovi nodi = copiare un blocco node-N e aggiornare BOOT_PEERS.
+# Per aggiungere un nodo: copia node-2, rinomina in node-3,
+# aggiorna porta host. Nessun hardcoding di indirizzi richiesto.
 # ============================================================
 
 services:
+
+  # ── Registry — discovery dinamico dei nodi ──────────
+  registry:
+    build:
+      context: ./registry
+      dockerfile: Dockerfile
+    container_name: hyperspace_registry
+    ports:
+      - "${REGISTRY_PORT:-8086}:8086"
+    environment:
+      REGISTRY_PORT: "${REGISTRY_PORT:-8086}"
+      NODE_TTL: "${NODE_TTL:-60}"
+      PYTHONUNBUFFERED: "1"
+    networks:
+      - hyperspace
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
 
   # ── Ollama (CPU default) ─────────────────────────────
   ollama:
@@ -137,13 +160,19 @@ services:
       context: .
       dockerfile: control-plane/Dockerfile
     container_name: hyperspace_control_plane
-    depends_on: [node-1, node-2]
+    depends_on:
+      registry:
+        condition: service_healthy
+      node-1:
+        condition: service_started
+      node-2:
+        condition: service_started
     ports:
       - "8085:8085"
     environment:
       PYTHONUNBUFFERED: "1"
-      # Nodi noti al control-plane tramite nome servizio Docker
       NODE_ENDPOINTS: "node-1:8084,node-2:8084"
+      REGISTRY_URL: "http://registry:8086"
       OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3}
     extra_hosts:
@@ -155,25 +184,31 @@ services:
   # ─────────────────────────────────────────────
   # NODI — stessa immagine, tier calcolato al boot
   # Per aggiungere un nodo: copia node-2, rinomina in node-3,
-  # aggiorna porta host e BOOT_PEERS degli altri nodi.
+  # aggiorna porta host. Il nodo si auto-registra al registry.
   # ─────────────────────────────────────────────
 
   node-1:
     build:
-      context: .                      # root del progetto
+      context: .
       dockerfile: node/Dockerfile
     container_name: hyperspace_node_1
+    depends_on:
+      registry:
+        condition: service_healthy
     ports:
       - "8081:8084"
     volumes:
-      - ./data/node-1:/app/data       # identità ECDSA persistente
+      - ./data/node-1:/app/data
     environment:
       NODE_HOSTNAME: node-1
       NODE_PORT: "8084"
       DATA_DIR: /app/data
+      PUBLIC_ENDPOINT: ${PUBLIC_ENDPOINT:-}
+      REGISTRY_URL: "http://registry:8086"
+      HEARTBEAT_INTERVAL: "${HEARTBEAT_INTERVAL:-30}"
       OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3}
-      BOOT_PEERS: "node-2:8084"       # peer iniziali — nessun authority
+      BOOT_PEERS: "node-2:8084"
       PYTHONUNBUFFERED: "1"
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -186,6 +221,9 @@ services:
       context: .
       dockerfile: node/Dockerfile
     container_name: hyperspace_node_2
+    depends_on:
+      registry:
+        condition: service_healthy
     ports:
       - "8082:8084"
     volumes:
@@ -194,9 +232,12 @@ services:
       NODE_HOSTNAME: node-2
       NODE_PORT: "8084"
       DATA_DIR: /app/data
+      PUBLIC_ENDPOINT: ${PUBLIC_ENDPOINT:-}
+      REGISTRY_URL: "http://registry:8086"
+      HEARTBEAT_INTERVAL: "${HEARTBEAT_INTERVAL:-30}"
       OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3}
-      BOOT_PEERS: "node-1:8084"       # peer iniziali — nessun authority
+      BOOT_PEERS: "node-1:8084"
       PYTHONUNBUFFERED: "1"
     extra_hosts:
       - "host.docker.internal:host-gateway"
