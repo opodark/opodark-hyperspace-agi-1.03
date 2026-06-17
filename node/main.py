@@ -14,7 +14,7 @@ from shared.identity import generate_or_load_identity, sign_message, verify_mess
 
 app = FastAPI()
 
-# ── IDENTITÀ ──────────────────────────────────────────────
+# ── IDENTITA' ─────────────────────────────────────────────
 _identity    = generate_or_load_identity()
 NODE_ID      = _identity["node_id"]
 NODE_PUBKEY  = _identity["public_key"]
@@ -28,9 +28,8 @@ DEFAULT_MODEL       = os.getenv("OLLAMA_MODEL", "phi3")
 HEARTBEAT_EVERY     = int(os.getenv("HEARTBEAT_EVERY", 15))
 PUBLIC_ENDPOINT     = os.getenv("PUBLIC_ENDPOINT", "").strip().rstrip("/")
 BOOT_PEERS          = [p.strip().rstrip("/") for p in os.getenv("BOOT_PEERS", "").split(",") if p.strip()]
-# URL del control-plane a cui questo nodo si auto-registra
-# Es: http://host.docker.internal:8085  oppure  https://xxxx.ngrok-free.dev
 CONTROL_PLANE_URL   = os.getenv("CONTROL_PLANE_URL", "").strip().rstrip("/")
+REGISTRY_URL        = os.getenv("REGISTRY_URL", "http://registry:8086").strip().rstrip("/")
 
 _boot_time = time.time()
 
@@ -112,11 +111,34 @@ async def ollama_health() -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+# ── REGISTRAZIONE AL REGISTRY ─────────────────────────────
+async def register_to_registry():
+    """POST /nodes al registry di discovery."""
+    payload = {
+        "node_id":      NODE_ID,
+        "public_key":   NODE_PUBKEY,
+        "tier":         NODE_PROFILE["tier"],
+        "endpoint":     NODE_ADVERTISED_ENDPOINT,
+        "capabilities": NODE_PROFILE["capabilities"],
+        "vram_gb":      VRAM_GB,
+        "version":      NODE_PROFILE["version"],
+        "uptime_s":     int(time.time() - _boot_time),
+        "peers_active": len([p for p in _peers.values() if p["status"] == "active"]),
+        "status":       "active",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.post(f"{REGISTRY_URL}/nodes", json=payload)
+            if r.status_code in (200, 201):
+                print(f"[NODE:{NODE_ID[:10]}] registered to registry {REGISTRY_URL}")
+            else:
+                print(f"[NODE:{NODE_ID[:10]}] registry announce HTTP {r.status_code}: {r.text[:120]}")
+    except Exception as e:
+        print(f"[NODE:{NODE_ID[:10]}] registry announce failed: {e}")
+
 # ── REGISTRAZIONE AL CONTROL-PLANE ────────────────────────
 async def register_to_control_plane():
-    """Chiama POST /mesh/announce sul control-plane con il proprio profilo.
-    Funziona sia per nodi locali (stesso Docker) che remoti (ngrok/IP).
-    """
+    """POST /mesh/announce sul control-plane."""
     if not CONTROL_PLANE_URL:
         return
     payload = {
@@ -165,18 +187,17 @@ async def announce_to_peer(endpoint: str):
                     "tier":         data.get("tier", "leaf"),
                     "capabilities": data.get("capabilities", []),
                 })
-                print(f"[NODE:{NODE_ID[:10]}] announce ok → {endpoint}")
+                print(f"[NODE:{NODE_ID[:10]}] announce ok -> {endpoint}")
     except Exception as e:
-        print(f"[NODE:{NODE_ID[:10]}] announce failed → {endpoint}: {e}")
+        print(f"[NODE:{NODE_ID[:10]}] announce failed -> {endpoint}: {e}")
 
 def heartbeat_loop():
     time.sleep(5)
 
     async def _boot():
-        # Annuncio ai boot peers P2P
         for peer_endpoint in BOOT_PEERS:
             await announce_to_peer(peer_endpoint)
-        # Registrazione al control-plane
+        await register_to_registry()
         await register_to_control_plane()
 
     asyncio.run(_boot())
@@ -190,7 +211,7 @@ def heartbeat_loop():
             active = [p for p in _peers.values() if p["status"] == "active"]
             for peer in active:
                 await announce_to_peer(peer["endpoint"])
-            # Re-registrazione periodica al control-plane
+            await register_to_registry()
             await register_to_control_plane()
 
         asyncio.run(_hb())
@@ -203,6 +224,7 @@ async def startup_event():
     print(f"[NODE:{NODE_ID[:10]}] started")
     print(f"[NODE:{NODE_ID[:10]}] tier={NODE_PROFILE['tier']}")
     print(f"[NODE:{NODE_ID[:10]}] advertised={NODE_ADVERTISED_ENDPOINT}")
+    print(f"[NODE:{NODE_ID[:10]}] registry={REGISTRY_URL}")
     print(f"[NODE:{NODE_ID[:10]}] control-plane={CONTROL_PLANE_URL or 'not set'}")
     if BOOT_PEERS:
         print(f"[NODE:{NODE_ID[:10]}] boot_peers={BOOT_PEERS}")
