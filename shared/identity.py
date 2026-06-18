@@ -1,15 +1,19 @@
 # shared/identity.py
-# HyperSpace AGI — Node Identity Module
+# HyperSpace AGI v1.02 — Node Identity + Request Signing
 # Genera e persiste keypair ECDSA secp256k1 per ogni nodo.
 # node_id = sha256(pubkey_bytes).hexdigest()[:40]
+# v1.02: aggiunge make_request_headers / verify_request_headers per firma HTTP inter-nodo
 
+import base64
 import hashlib
 import json
 import os
+import time
 from datetime import datetime, timezone
 
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.exceptions import InvalidSignature
 
 DATA_DIR = os.getenv("DATA_DIR", "./data")
 ID_FILE  = os.path.join(DATA_DIR, "node_identity.json")
@@ -38,7 +42,6 @@ def generate_or_load_identity() -> dict:
         print(f"[IDENTITY] Loaded existing node_id: {data['node_id']}")
         return data
 
-    # Primo boot — genera nuova identità
     private_key = ec.generate_private_key(ec.SECP256K1())
     public_key  = private_key.public_key()
     pub_bytes   = _pubkey_bytes(public_key)
@@ -52,7 +55,6 @@ def generate_or_load_identity() -> dict:
 
     with open(ID_FILE, "w") as f:
         json.dump(identity, f, indent=2)
-
     with open(priv_path, "wb") as f:
         f.write(private_key.private_bytes(
             serialization.Encoding.PEM,
@@ -66,7 +68,7 @@ def generate_or_load_identity() -> dict:
 
 
 def sign_message(payload: dict, private_key) -> dict:
-    """Firma il payload con la chiave privata ECDSA del nodo.
+    """Firma il payload JSON con la chiave privata ECDSA del nodo.
     Restituisce il payload con campo 'signature' aggiunto.
     """
     msg = {k: v for k, v in payload.items() if k != "signature"}
@@ -92,4 +94,61 @@ def verify_message(message: dict) -> bool:
         pub_key.verify(bytes.fromhex(sig_hex), msg_bytes, ec.ECDSA(hashes.SHA256()))
         return True
     except Exception:
+        return False
+
+
+# ── v1.02: HTTP REQUEST SIGNING ───────────────────────────────────────────────
+
+def make_request_headers(node_id: str, pubkey_hex: str, private_key, body: bytes = b"") -> dict:
+    """Genera gli header HTTP per firmare una richiesta inter-nodo.
+
+    Header prodotti:
+      X-Node-Id        : node_id del mittente
+      X-Node-Pubkey    : pubkey hex del mittente
+      X-Node-Timestamp : unix timestamp (intero)
+      X-Node-Signature : firma ECDSA su sha256(timestamp + body)
+    """
+    ts = str(int(time.time()))
+    body_hash = hashlib.sha256(body).digest()
+    to_sign = (ts.encode() + b":") + body_hash
+    sig = private_key.sign(to_sign, ec.ECDSA(hashes.SHA256()))
+    return {
+        "X-Node-Id":        node_id,
+        "X-Node-Pubkey":    pubkey_hex,
+        "X-Node-Timestamp": ts,
+        "X-Node-Signature": base64.b64encode(sig).decode(),
+    }
+
+
+def verify_request_headers(headers: dict, body: bytes = b"", max_age_s: int = 30) -> bool:
+    """Verifica gli header di firma di una richiesta inter-nodo in ingresso.
+
+    Controlla:
+    - presenza di tutti gli header richiesti
+    - timestamp non troppo vecchio (replay protection, default 30s)
+    - firma ECDSA valida su sha256(timestamp + body)
+    """
+    try:
+        node_id   = headers.get("X-Node-Id", "")
+        pubkey_hex = headers.get("X-Node-Pubkey", "")
+        ts_str    = headers.get("X-Node-Timestamp", "")
+        sig_b64   = headers.get("X-Node-Signature", "")
+
+        if not all([node_id, pubkey_hex, ts_str, sig_b64]):
+            return False
+
+        # Replay protection
+        ts = int(ts_str)
+        if abs(time.time() - ts) > max_age_s:
+            return False
+
+        # Verifica firma
+        body_hash = hashlib.sha256(body).digest()
+        to_sign   = (ts_str.encode() + b":") + body_hash
+        pub_key   = ec.EllipticCurvePublicKey.from_encoded_point(
+            ec.SECP256K1(), bytes.fromhex(pubkey_hex)
+        )
+        pub_key.verify(base64.b64decode(sig_b64), to_sign, ec.ECDSA(hashes.SHA256()))
+        return True
+    except (InvalidSignature, Exception):
         return False

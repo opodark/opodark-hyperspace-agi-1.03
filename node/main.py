@@ -1,7 +1,9 @@
 # node/main.py
-# HyperSpace AGI v0.2 — Unified Node
+# HyperSpace AGI v1.02 — Unified Node
+# v1.02: middleware firma inter-nodo, /ollama/pull SSE, version bump
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import StreamingResponse
 import asyncio
 import httpx
 import os
@@ -10,7 +12,13 @@ import threading
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from shared.identity import generate_or_load_identity, sign_message, verify_message
+from shared.identity import (
+    generate_or_load_identity,
+    sign_message,
+    verify_message,
+    make_request_headers,
+    verify_request_headers,
+)
 
 app = FastAPI()
 
@@ -30,6 +38,7 @@ PUBLIC_ENDPOINT     = os.getenv("PUBLIC_ENDPOINT", "").strip().rstrip("/")
 BOOT_PEERS          = [p.strip().rstrip("/") for p in os.getenv("BOOT_PEERS", "").split(",") if p.strip()]
 CONTROL_PLANE_URL   = os.getenv("CONTROL_PLANE_URL", "").strip().rstrip("/")
 REGISTRY_URL        = os.getenv("REGISTRY_URL", "http://registry:8086").strip().rstrip("/")
+SIGN_REQUESTS       = os.getenv("SIGN_REQUESTS", "true").lower() == "true"
 
 _boot_time = time.time()
 
@@ -66,7 +75,7 @@ NODE_PROFILE = {
     "endpoint":     NODE_ADVERTISED_ENDPOINT,
     "capabilities": NODE_CAPABILITIES,
     "vram_gb":      VRAM_GB,
-    "version":      "0.2.0",
+    "version":      "1.02.0",
 }
 
 # ── PEER REGISTRY ─────────────────────────────────────────
@@ -93,6 +102,12 @@ def peer_to_url(endpoint: str) -> str:
         return endpoint.rstrip("/")
     return f"http://{endpoint}"
 
+def _signed_headers(body: bytes = b"") -> dict:
+    """Genera header di firma per richieste uscenti verso altri nodi."""
+    if not SIGN_REQUESTS:
+        return {}
+    return make_request_headers(NODE_ID, NODE_PUBKEY, _private_key, body)
+
 async def ollama_generate(prompt: str, model: str = DEFAULT_MODEL) -> str:
     payload = {"model": model, "prompt": prompt, "stream": False}
     try:
@@ -112,8 +127,6 @@ async def ollama_health() -> dict:
         return {"ok": False, "error": str(e)}
 
 # ── REGISTRAZIONE AL REGISTRY ─────────────────────────────
-# Il registry accetta POST /register con schema:
-# { node_id, public_address, role, metadata }
 async def register_to_registry():
     payload = {
         "node_id":        NODE_ID,
@@ -128,9 +141,11 @@ async def register_to_registry():
             "public_key":   NODE_PUBKEY[:32],
         }
     }
+    body = str(payload).encode()
+    hdrs = _signed_headers(body)
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
-            r = await client.post(f"{REGISTRY_URL}/register", json=payload)
+            r = await client.post(f"{REGISTRY_URL}/register", json=payload, headers=hdrs)
             if r.status_code in (200, 201):
                 print(f"[NODE:{NODE_ID[:10]}] registered to registry OK")
             else:
@@ -153,9 +168,11 @@ async def register_to_control_plane():
         "uptime_s":     int(time.time() - _boot_time),
         "peers_active": len([p for p in _peers.values() if p["status"] == "active"]),
     }
+    body = str(payload).encode()
+    hdrs = _signed_headers(body)
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
-            r = await client.post(f"{CONTROL_PLANE_URL}/mesh/announce", json=payload)
+            r = await client.post(f"{CONTROL_PLANE_URL}/mesh/announce", json=payload, headers=hdrs)
             if r.status_code == 200:
                 print(f"[NODE:{NODE_ID[:10]}] registered to control-plane OK")
             else:
@@ -175,8 +192,11 @@ async def announce_to_peer(endpoint: str):
             "version":      NODE_PROFILE["version"],
             "timestamp":    time.time(),
         })
+        import json as _json
+        body = _json.dumps(payload, sort_keys=True).encode()
+        hdrs = _signed_headers(body)
         async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.post(f"{base_url}/announce", json=payload)
+            r = await client.post(f"{base_url}/announce", json=payload, headers=hdrs)
             if r.status_code == 200:
                 data = r.json()
                 for peer in data.get("peers", []):
@@ -222,18 +242,40 @@ def heartbeat_loop():
 async def startup_event():
     t = threading.Thread(target=heartbeat_loop, daemon=True)
     t.start()
-    print(f"[NODE:{NODE_ID[:10]}] started")
+    print(f"[NODE:{NODE_ID[:10]}] started v1.02.0")
     print(f"[NODE:{NODE_ID[:10]}] tier={NODE_PROFILE['tier']}")
     print(f"[NODE:{NODE_ID[:10]}] advertised={NODE_ADVERTISED_ENDPOINT}")
-    print(f"[NODE:{NODE_ID[:10]}] registry={REGISTRY_URL}")
-    print(f"[NODE:{NODE_ID[:10]}] control-plane={CONTROL_PLANE_URL or 'not set'}")
+    print(f"[NODE:{NODE_ID[:10]}] sign_requests={SIGN_REQUESTS}")
     if BOOT_PEERS:
         print(f"[NODE:{NODE_ID[:10]}] boot_peers={BOOT_PEERS}")
+
+# ── MIDDLEWARE: verifica firma sulle chiamate inter-nodo ───
+# Applica solo se SIGN_REQUESTS=true. Le rotte pubbliche (/health, /status, /peers)
+# non richiedono firma. Le rotte sensibili (/announce, /execute, /peer/add)
+# verificano gli header X-Node-*.
+SIGNED_PATHS = {"/announce", "/execute", "/peer/add", "/verify"}
+
+@app.middleware("http")
+async def inter_node_auth(request: Request, call_next):
+    if SIGN_REQUESTS and request.method == "POST" and request.url.path in SIGNED_PATHS:
+        body = await request.body()
+        hdrs = dict(request.headers)
+        if not verify_request_headers(hdrs, body):
+            return Response(
+                content='{"error":"invalid or missing node signature"}',
+                status_code=401,
+                media_type="application/json",
+            )
+        # Re-inject body for downstream handler
+        async def receive():
+            return {"type": "http.request", "body": body}
+        request._receive = receive
+    return await call_next(request)
 
 # ── ENDPOINTS ─────────────────────────────────────────────
 @app.get("/health")
 def health():
-    return {"status": "ok", "node_id": NODE_ID, "tier": NODE_PROFILE["tier"]}
+    return {"status": "ok", "node_id": NODE_ID, "tier": NODE_PROFILE["tier"], "version": NODE_PROFILE["version"]}
 
 @app.get("/identity")
 def get_identity():
@@ -295,7 +337,6 @@ async def announce(message: dict):
         "tier":         message.get("tier", "leaf"),
         "capabilities": message.get("capabilities", []),
     })
-    print(f"[NODE:{NODE_ID[:10]}] accepted announce from {message.get('node_id', '')[:10]}")
     prune_stale_peers()
     return {
         "accepted":     True,
@@ -331,6 +372,35 @@ async def check_ollama():
 async def list_models():
     h = await ollama_health()
     return {"models": h.get("models", [])} if h["ok"] else {"error": h.get("error")}
+
+# ── v1.02: /ollama/pull — stream SSE progress da Ollama ───
+@app.post("/ollama/pull")
+async def ollama_pull(body: dict):
+    """Fa pull di un modello Ollama e streama il progresso come SSE.
+    Body: { "model": "phi3" }
+    """
+    model = body.get("model", DEFAULT_MODEL)
+
+    async def stream_pull():
+        try:
+            async with httpx.AsyncClient(timeout=600.0) as client:
+                async with client.stream(
+                    "POST",
+                    f"{OLLAMA_URL}/api/pull",
+                    json={"name": model, "stream": True},
+                ) as resp:
+                    async for line in resp.aiter_lines():
+                        if line.strip():
+                            yield f"data: {line}\n\n"
+            yield "data: {\"status\":\"done\"}\n\n"
+        except Exception as e:
+            yield f"data: {{\"error\": \"{e}\"}}\n\n"
+
+    return StreamingResponse(
+        stream_pull(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 if __name__ == "__main__":
     import uvicorn
