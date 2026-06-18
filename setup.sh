@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================
-# HyperSpace AGI v0.2 — Setup Script (macOS / Linux)
+# HyperSpace AGI v1.02 — Setup Script (macOS / Linux)
 # =============================================================
 set -euo pipefail
 
@@ -13,7 +13,7 @@ err()  { echo -e "${RED}[error]${RESET} $*"; exit 1; }
 hdr()  { echo -e "\n${BOLD}${CYAN}$*${RESET}"; }
 
 echo -e ""
-echo -e "${BOLD}${CYAN}⬢  HyperSpace AGI v0.2 — Setup${RESET}"
+echo -e "${BOLD}${CYAN}⬢  HyperSpace AGI v1.02 — Setup${RESET}"
 echo -e "    Mesh di agenti IA locali su Docker + modelli LLM"
 echo -e ""
 
@@ -49,6 +49,73 @@ set_env() {
     fi
 }
 
+# ── HELPER: patch Ollama su Linux per ascoltare su 0.0.0.0 ─────────────
+_patch_ollama_linux() {
+    local port="${1:-11434}"
+
+    # Già ascolta su 0.0.0.0? Non serve nulla.
+    if ss -tlnp 2>/dev/null | grep -q "0\.0\.0\.0:${port}"; then
+        log "Ollama già in ascolto su 0.0.0.0:${port} — nessuna modifica necessaria."
+        return 0
+    fi
+
+    warn "Ollama è in ascolto solo su 127.0.0.1 — i container non possono raggiungerlo."
+    warn "Riconfigurazione automatica di Ollama per ascoltare su 0.0.0.0:${port}..."
+
+    # --- Caso A: systemd unit esiste ---
+    if systemctl list-unit-files ollama.service &>/dev/null 2>&1 | grep -q ollama; then
+        local OVERRIDE_DIR="/etc/systemd/system/ollama.service.d"
+        sudo mkdir -p "$OVERRIDE_DIR"
+        sudo tee "${OVERRIDE_DIR}/override.conf" > /dev/null <<EOF
+[Service]
+Environment="OLLAMA_HOST=0.0.0.0:${port}"
+EOF
+        sudo systemctl daemon-reload
+        sudo systemctl restart ollama
+        log "Ollama systemd riavviato con OLLAMA_HOST=0.0.0.0:${port}"
+
+    # --- Caso B: Ollama installato come binario standalone (no systemd) ---
+    elif command -v ollama &>/dev/null; then
+        warn "Ollama non è gestito da systemd."
+        warn "Fermo il processo ollama corrente e lo riavvio in background con OLLAMA_HOST=0.0.0.0:${port}..."
+
+        # Ferma eventuali istanze in esecuzione
+        pkill -x ollama 2>/dev/null || true
+        sleep 1
+
+        # Aggiungi OLLAMA_HOST al profilo shell se non già presente
+        local PROFILE="${HOME}/.bashrc"
+        if ! grep -q 'OLLAMA_HOST' "$PROFILE" 2>/dev/null; then
+            echo "export OLLAMA_HOST=0.0.0.0:${port}" >> "$PROFILE"
+            log "OLLAMA_HOST aggiunto a $PROFILE"
+        fi
+
+        # Riavvia in background
+        OLLAMA_HOST="0.0.0.0:${port}" nohup ollama serve > /tmp/ollama.log 2>&1 &
+        sleep 2
+        log "Ollama riavviato in background (log: /tmp/ollama.log)"
+
+    else
+        warn "Impossibile riconfigurare Ollama automaticamente."
+        warn "Esegui manualmente: OLLAMA_HOST=0.0.0.0:${port} ollama serve"
+        return 1
+    fi
+
+    # Apri porta sul bridge docker0 se ufw è attivo
+    if command -v ufw &>/dev/null && sudo ufw status 2>/dev/null | grep -q 'Status: active'; then
+        sudo ufw allow in on docker0 to any port "${port}" comment 'ollama docker bridge' 2>/dev/null || true
+        log "ufw: regola aggiunta per docker0 -> port ${port}"
+    fi
+
+    # Verifica finale
+    sleep 1
+    if ss -tlnp 2>/dev/null | grep -q "0\.0\.0\.0:${port}"; then
+        log "✓ Ollama ora in ascolto su 0.0.0.0:${port}"
+    else
+        warn "Ollama potrebbe non essere ancora pronto — controlla con: ss -tlnp | grep ${port}"
+    fi
+}
+
 # ── 3. Backend inferenza ────────────────────────────────────────────────────
 hdr "3/4 — Backend di inferenza LLM"
 
@@ -71,7 +138,7 @@ case "$BACKEND_CHOICE" in
     read -rp "  URL Ollama [default: http://localhost:11434]: " OLLAMA_INPUT
     OLLAMA_INPUT=${OLLAMA_INPUT:-http://localhost:11434}
 
-    # Verifica connessione
+    # Verifica connessione sull'host (prima del remap)
     if curl -sf "${OLLAMA_INPUT}/api/tags" &>/dev/null; then
         log "Ollama raggiungibile su $OLLAMA_INPUT"
     else
@@ -87,17 +154,29 @@ case "$BACKEND_CHOICE" in
         if [ "$OS_TYPE" = "Darwin" ]; then
             OLLAMA_DOCKER_URL="http://host.docker.internal:${OLLAMA_PORT}"
         else
+            # ── FIX LINUX: patch Ollama per ascoltare su 0.0.0.0 ──────────
+            _patch_ollama_linux "$OLLAMA_PORT"
+            # ────────────────────────────────────────────────────────────────
             if getent hosts host.docker.internal &>/dev/null; then
                 OLLAMA_DOCKER_URL="http://host.docker.internal:${OLLAMA_PORT}"
             else
                 DOCKER0_IP=$(ip addr show docker0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1 || echo "172.17.0.1")
                 OLLAMA_DOCKER_URL="http://${DOCKER0_IP}:${OLLAMA_PORT}"
-                warn "Linux: usando docker0 IP $DOCKER0_IP per raggiungere l'host"
+                log "Linux: usando docker0 IP $DOCKER0_IP per raggiungere l'host"
             fi
         fi
     fi
     set_env "OLLAMA_URL" "$OLLAMA_DOCKER_URL"
     log "OLLAMA_URL impostato: $OLLAMA_DOCKER_URL"
+
+    # Verifica finale raggiungibilità dall'URL che useranno i container
+    sleep 1
+    if curl -sf "${OLLAMA_DOCKER_URL}/api/tags" &>/dev/null; then
+        log "✓ Ollama raggiungibile via docker URL: $OLLAMA_DOCKER_URL"
+    else
+        warn "Ollama non risponde su $OLLAMA_DOCKER_URL — i container potrebbero non riuscire a connettersi."
+        warn "Verifica con: curl $OLLAMA_DOCKER_URL/api/tags"
+    fi
     COMPOSE_PROFILE=""
     ;;
 
