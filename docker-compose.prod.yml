@@ -1,14 +1,22 @@
 version: '3.8'
 
 # ============================================================
-# HyperSpace AGI v0.2 — Compose PRODUZIONE
+# HyperSpace AGI v1.02 — Compose PRODUZIONE
 #
-# Ollama NON è incluso: deve girare sull'host (nativo o LM Studio).
-# Usa setup.sh per la configurazione guidata.
+# Architettura a due hub:
+#   Mac    → PUBLIC_ENDPOINT=https://charlesetta-haptical-unconcentratedly.ngrok-free.dev
+#   Ubuntu → PUBLIC_ENDPOINT=https://sanctuary-mower-plated.ngrok-free.dev
 #
-# Dashboard:   http://localhost:8085/dashboard
-# Open WebUI:  http://localhost:3000
-# Node API:    http://localhost:8084/status
+# I due hub si annunciano reciprocamente via BOOT_PEERS.
+# I nuovi nodi leaf usano entrambi gli URL come BOOT_PEERS.
+#
+# Uso:
+#   Mac:    cp .env.mac .env && docker compose -f docker-compose.prod.yml up -d --build
+#   Ubuntu: cp .env.ubuntu .env && docker compose -f docker-compose.prod.yml up -d --build
+#
+# Dashboard:  http://localhost:8085/dashboard
+# Node API:   http://localhost:8084/status
+# Registry:   http://localhost:8086/nodes
 # ============================================================
 
 services:
@@ -30,7 +38,7 @@ services:
       - hyperspace
     restart: unless-stopped
 
-  # ── Nodo agente locale ──────────────────────────────────
+  # ── Nodo agente (hub su Mac/Ubuntu, leaf su altri) ──────
   node:
     build:
       context: .
@@ -46,24 +54,31 @@ services:
       DATA_DIR: /app/data
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3}
-      BOOT_PEERS: ${BOOT_PEERS:-}
       NODE_TIER: ${NODE_TIER:-leaf}
       VRAM_GB: ${VRAM_GB:-0.0}
-      AUTHORITY_ENABLED: "false"
-      # Endpoint pubblico di questo nodo (es. URL ngrok)
-      # Se vuoto, usa NODE_HOSTNAME:NODE_PORT
+      SIGN_REQUESTS: ${SIGN_REQUESTS:-true}
+      HEARTBEAT_EVERY: ${HEARTBEAT_EVERY:-15}
+      # Endpoint pubblico di questo nodo (URL ngrok o IP pubblico)
+      # Hub Mac:    https://charlesetta-haptical-unconcentratedly.ngrok-free.dev
+      # Hub Ubuntu: https://sanctuary-mower-plated.ngrok-free.dev
+      # Nodo leaf:  lasciare vuoto o mettere il proprio ngrok
       PUBLIC_ENDPOINT: ${PUBLIC_ENDPOINT:-}
-      # URL del control-plane a cui questo nodo si auto-registra
-      # Mac locale: http://control-plane:8085
-      # Ubuntu remoto: https://charlesetta-haptical-unconcentratedly.ngrok-free.dev/cp
-      #   oppure http://host.docker.internal:8085 se control-plane gira sull'host
+      # Boot peers — per i due hub: l'URL dell'altro hub
+      # Per nodi leaf: entrambi gli hub separati da virgola
+      #   BOOT_PEERS=https://charlesetta-haptical-unconcentratedly.ngrok-free.dev,https://sanctuary-mower-plated.ngrok-free.dev
+      BOOT_PEERS: ${BOOT_PEERS:-}
+      # Control-plane locale
       CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:-http://control-plane:8085}
+      # Registry locale
+      REGISTRY_URL: ${REGISTRY_URL:-http://registry:8086}
       PYTHONUNBUFFERED: "1"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
       - hyperspace
     restart: unless-stopped
+    depends_on:
+      - registry
 
   # ── Control Plane + Dashboard ────────────────────────────
   control-plane:
@@ -71,7 +86,9 @@ services:
       context: .
       dockerfile: control-plane/Dockerfile
     container_name: hyperspace_control_plane
-    depends_on: [node]
+    depends_on:
+      - node
+      - registry
     ports:
       - "8085:8085"
     environment:
@@ -79,6 +96,30 @@ services:
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3}
       AUTHORITY_ENABLED: "false"
+      # URL pubblico di questo control-plane (usato da nodi remoti per registrarsi)
+      # Mac:    https://charlesetta-haptical-unconcentratedly.ngrok-free.dev
+      # Ubuntu: https://sanctuary-mower-plated.ngrok-free.dev
+      PUBLIC_ENDPOINT: ${PUBLIC_ENDPOINT:-}
+      PYTHONUNBUFFERED: "1"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - hyperspace
+    restart: unless-stopped
+
+  # ── Registry — discovery dinamico nodi ──────────────────
+  registry:
+    build:
+      context: .
+      dockerfile: registry/Dockerfile
+    container_name: hyperspace_registry
+    ports:
+      - "8086:8086"
+    volumes:
+      - ./data/registry:/app/data
+    environment:
+      REGISTRY_PORT: ${REGISTRY_PORT:-8086}
+      NODE_TTL: ${NODE_TTL:-60}
       PYTHONUNBUFFERED: "1"
     extra_hosts:
       - "host.docker.internal:host-gateway"
