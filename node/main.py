@@ -22,13 +22,13 @@ from shared.identity import (
 
 app = FastAPI()
 
-# ── IDENTITA' ─────────────────────────────────────────────
+# ── IDENTITA' ──────────────────────────────────────────────
 _identity    = generate_or_load_identity()
 NODE_ID      = _identity["node_id"]
 NODE_PUBKEY  = _identity["public_key"]
 _private_key = _identity["_private_key"]
 
-# ── CONFIG ────────────────────────────────────────────────
+# ── CONFIG ───────────────────────────────────────────────
 NODE_HOSTNAME       = os.getenv("NODE_HOSTNAME", "localhost")
 NODE_PORT           = int(os.getenv("NODE_PORT", 8084))
 OLLAMA_URL          = os.getenv("OLLAMA_URL", "http://ollama:11434")
@@ -39,6 +39,9 @@ BOOT_PEERS          = [p.strip().rstrip("/") for p in os.getenv("BOOT_PEERS", ""
 CONTROL_PLANE_URL   = os.getenv("CONTROL_PLANE_URL", "").strip().rstrip("/")
 REGISTRY_URL        = os.getenv("REGISTRY_URL", "http://registry:8086").strip().rstrip("/")
 SIGN_REQUESTS       = os.getenv("SIGN_REQUESTS", "true").lower() == "true"
+# NODE_TIER dall'env: se impostato, usa quello come tier fisso (hub/root);
+# altrimenti calcola dinamicamente.
+_FORCED_TIER        = os.getenv("NODE_TIER", "").strip().lower()
 
 _boot_time = time.time()
 
@@ -55,6 +58,9 @@ def detect_vram_gb() -> float:
         return 0.0
 
 def calculate_tier(vram_gb: float, uptime_s: float, reputation: float = 0.5) -> str:
+    # Se NODE_TIER è forzato da env, rispettalo sempre
+    if _FORCED_TIER in ("hub", "root", "leaf"):
+        return _FORCED_TIER
     root_score = min(uptime_s / 604800, 1.0) * 25 + 0.5 * 35 + reputation * 40
     if root_score >= 85.0: return "root"
     if vram_gb >= 4.0:     return "hub"
@@ -103,7 +109,6 @@ def peer_to_url(endpoint: str) -> str:
     return f"http://{endpoint}"
 
 def _signed_headers(body: bytes = b"") -> dict:
-    """Genera header di firma per richieste uscenti verso altri nodi."""
     if not SIGN_REQUESTS:
         return {}
     return make_request_headers(NODE_ID, NODE_PUBKEY, _private_key, body)
@@ -180,7 +185,7 @@ async def register_to_control_plane():
     except Exception as e:
         print(f"[NODE:{NODE_ID[:10]}] control-plane announce failed: {e}")
 
-# ── PEER DISCOVERY & HEARTBEAT ────────────────────────────
+# ── PEER DISCOVERY & HEARTBEAT ───────────────────────────
 async def announce_to_peer(endpoint: str):
     base_url = peer_to_url(endpoint)
     try:
@@ -225,6 +230,7 @@ def heartbeat_loop():
 
     while True:
         time.sleep(HEARTBEAT_EVERY)
+        # Aggiorna tier rispettando NODE_TIER forzato da env
         NODE_PROFILE["tier"] = calculate_tier(VRAM_GB, time.time() - _boot_time)
         prune_stale_peers()
 
@@ -243,16 +249,13 @@ async def startup_event():
     t = threading.Thread(target=heartbeat_loop, daemon=True)
     t.start()
     print(f"[NODE:{NODE_ID[:10]}] started v1.02.0")
-    print(f"[NODE:{NODE_ID[:10]}] tier={NODE_PROFILE['tier']}")
+    print(f"[NODE:{NODE_ID[:10]}] tier={NODE_PROFILE['tier']} (forced={_FORCED_TIER or 'no'})")
     print(f"[NODE:{NODE_ID[:10]}] advertised={NODE_ADVERTISED_ENDPOINT}")
     print(f"[NODE:{NODE_ID[:10]}] sign_requests={SIGN_REQUESTS}")
     if BOOT_PEERS:
         print(f"[NODE:{NODE_ID[:10]}] boot_peers={BOOT_PEERS}")
 
-# ── MIDDLEWARE: verifica firma sulle chiamate inter-nodo ───
-# Applica solo se SIGN_REQUESTS=true. Le rotte pubbliche (/health, /status, /peers)
-# non richiedono firma. Le rotte sensibili (/announce, /execute, /peer/add)
-# verificano gli header X-Node-*.
+# ── MIDDLEWARE: verifica firma sulle chiamate inter-nodo ─────────
 SIGNED_PATHS = {"/announce", "/execute", "/peer/add", "/verify"}
 
 @app.middleware("http")
@@ -266,13 +269,12 @@ async def inter_node_auth(request: Request, call_next):
                 status_code=401,
                 media_type="application/json",
             )
-        # Re-inject body for downstream handler
         async def receive():
             return {"type": "http.request", "body": body}
         request._receive = receive
     return await call_next(request)
 
-# ── ENDPOINTS ─────────────────────────────────────────────
+# ── ENDPOINTS ───────────────────────────────────────────────
 @app.get("/health")
 def health():
     return {"status": "ok", "node_id": NODE_ID, "tier": NODE_PROFILE["tier"], "version": NODE_PROFILE["version"]}
@@ -373,12 +375,8 @@ async def list_models():
     h = await ollama_health()
     return {"models": h.get("models", [])} if h["ok"] else {"error": h.get("error")}
 
-# ── v1.02: /ollama/pull — stream SSE progress da Ollama ───
 @app.post("/ollama/pull")
 async def ollama_pull(body: dict):
-    """Fa pull di un modello Ollama e streama il progresso come SSE.
-    Body: { "model": "phi3" }
-    """
     model = body.get("model", DEFAULT_MODEL)
 
     async def stream_pull():

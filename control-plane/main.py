@@ -1,7 +1,5 @@
 # control-plane/main.py
 # HyperSpace AGI v1.02 — Control Plane + Dashboard
-# v1.02: SQLite log/nodes/tasks, /logs/export, paginazione /logs,
-#        /mesh/topology, /mesh/node/<ep>/pull proxy SSE
 
 from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
 import os, threading, time, requests, json, uuid, random
@@ -41,7 +39,6 @@ advanced_config = {
     "security":   {"sharedSecret": "", "secretRotatedAt": None},
 }
 
-# INIT DB
 db.init_db()
 
 # HELPERS
@@ -66,7 +63,7 @@ def _best_endpoint(node_info):
 def _node_list():
     return list(_nodes_by_id.values())
 
-# LOG (SQLite-backed)
+# LOG
 LOG_TYPES = {"connection_test", "inter_node_message", "dream", "node_chat", "system", "mesh_event"}
 
 def push_log(type_, summary, detail="", source="control-plane", target="", status="info", trace_id=""):
@@ -152,6 +149,7 @@ def mesh_announce():
     existing = _nodes_by_id.get(nid)
     should_update = True
     if existing:
+        # Preferisci URL https su http, ma non retrocedere mai
         if existing.get("endpoint", "").startswith("https://") and not ep.startswith("https://"):
             should_update = False
     if should_update:
@@ -184,12 +182,8 @@ def get_node_peers(endpoint):
     except Exception as e:
         return jsonify({"error": str(e)}), 503
 
-# ── v1.02: /mesh/topology ─────────────────────────────────
 @app.route('/mesh/topology')
 def mesh_topology():
-    """Restituisce nodi e archi PEX per la UI topologia grafo.
-    { nodes: [...], edges: [...] }
-    """
     nodes_out = []
     edges_out = []
     seen_edges = set()
@@ -204,7 +198,6 @@ def mesh_topology():
             "version":      node.get("version", ""),
             "status":       node.get("status", "active"),
         })
-        # Ottieni peers dal nodo
         try:
             ep = _best_endpoint(node)
             r  = requests.get(f"{_ep_to_url(ep)}/peers", timeout=2)
@@ -225,10 +218,8 @@ def mesh_topology():
 
     return jsonify({"nodes": nodes_out, "edges": edges_out})
 
-# ── v1.02: /mesh/node/<ep>/pull — proxy SSE pull modello ──
 @app.route('/mesh/node/<path:endpoint>/pull', methods=['POST'])
 def node_pull_model(endpoint):
-    """Proxy SSE: invia pull request al nodo e ristreama il progresso."""
     data  = request.get_json(force=True, silent=True) or {}
     model = data.get("model", advanced_config["ollama"]["defaultModel"])
 
@@ -405,14 +396,13 @@ CHAT_PHRASES = [
 ]
 
 def _poll_mesh_nodes():
+    """
+    Interroga tutti gli endpoint noti senza discriminazione.
+    FIX: rimossa la logica che skippava i nodi interni (es. node:8084)
+    se era già presente un nodo pubblico — causava la sparizione del
+    secondo hub dalla mesh quando il primo aveva già un endpoint https.
+    """
     for ep in list(_known_endpoints):
-        if not _is_public_ep(ep):
-            already_public = any(
-                _is_public_ep(n.get("endpoint", ""))
-                for n in _nodes_by_id.values() if n.get("endpoint", "") != ep
-            )
-            if already_public:
-                continue
         try:
             r = requests.get(f"{_ep_to_url(ep)}/status", timeout=3)
             if r.status_code == 200:
@@ -423,9 +413,11 @@ def _poll_mesh_nodes():
                 info["last_seen"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
                 if nid:
                     existing = _nodes_by_id.get(nid)
+                    # Aggiorna sempre, ma non retrocedere da https a http
                     if not existing or not existing.get("endpoint", "").startswith("https://") or ep.startswith("https://"):
                         _nodes_by_id[nid] = info
                         db.upsert_node(info)
+                # Scopri nuovi peer tramite PEX
                 try:
                     rp = requests.get(f"{_ep_to_url(ep)}/peers", timeout=2)
                     for peer in rp.json().get("peers", []):
