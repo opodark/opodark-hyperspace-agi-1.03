@@ -3,8 +3,9 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>HyperSpace AGI v0.2</title>
+<title>HyperSpace AGI v1.02</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.29.2/cytoscape.min.js"></script>
 <style>
 :root,[data-theme="dark"]{--bg:#0b0c0e;--surface:#131518;--surface2:#191c21;--surface3:#21252d;--border:#272b33;--divider:#1c1f26;--text:#c8cdd6;--text-muted:#636a78;--text-faint:#353a44;--primary:#4f98a3;--primary-h:#2d7d8a;--primary-bg:rgba(79,152,163,.12);--success:#6daa45;--success-bg:rgba(109,170,69,.12);--warning:#e8af34;--warning-bg:rgba(232,175,52,.10);--error:#dd6974;--error-bg:rgba(221,105,116,.12);--info:#5591c7;--info-bg:rgba(85,145,199,.12);--dream:#a86fdf;--dream-bg:rgba(168,111,223,.12);--chat:#fdab43;--chat-bg:rgba(253,171,67,.10);--root:#f06292;--hub:#4dd0e1;--leaf:#81c784;--reg:#c49a38;--reg-bg:rgba(196,154,56,.12);--font-mono:'JetBrains Mono',monospace;--font-body:'Inter',sans-serif;--radius:5px;--radius-lg:9px;--tr:160ms cubic-bezier(.16,1,.3,1)}
 [data-theme="light"]{--bg:#f0f1f4;--surface:#fff;--surface2:#f6f7fa;--surface3:#eaecf0;--border:#d8dbe2;--text:#191c22;--text-muted:#636a78;--text-faint:#b0b8c8;--primary:#016970;--primary-h:#014f55;--primary-bg:rgba(1,105,112,.08);--success:#3a6e1a;--success-bg:rgba(58,110,26,.08);--warning:#9a6800;--error:#a12c3a;--error-bg:rgba(161,44,58,.08);--info:#225f99;--info-bg:rgba(34,95,153,.08);--dream:#6b30b5;--dream-bg:rgba(107,48,181,.08);--chat:#b56200;--chat-bg:rgba(181,98,0,.08);--reg:#7a5c00;--reg-bg:rgba(122,92,0,.08)}
@@ -59,6 +60,7 @@ main{padding:18px 20px;display:grid}
 .hint{font-size:.65rem;color:var(--text-muted);margin-top:3px}
 .fg{display:flex;flex-direction:column;gap:4px}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+/* nodes */
 .nodes-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
 .node-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px;transition:border-color var(--tr)}
 .node-card:hover{border-color:var(--primary)}
@@ -77,6 +79,15 @@ main{padding:18px 20px;display:grid}
 .node-peers{margin-top:8px;font-size:.65rem;color:var(--text-muted);border-top:1px solid var(--divider);padding-top:7px}
 .peer-tag{display:inline-flex;background:var(--surface2);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-family:var(--font-mono);font-size:.6rem;margin:2px 2px 0 0;color:var(--text-muted)}
 .nodes-empty{padding:40px;text-align:center;color:var(--text-faint);font-size:.8rem}
+/* topology */
+.topo-wrap{display:flex;gap:12px;height:520px}
+#cyCanvas{flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-lg);min-width:0}
+.topo-sidebar{width:230px;flex-shrink:0;display:flex;flex-direction:column;gap:8px;overflow-y:auto}
+.topo-detail{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:12px;font-size:.72rem}
+.topo-detail-title{font-weight:700;color:var(--primary);margin-bottom:8px;font-family:var(--font-mono)}
+.topo-kv{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font-size:.68rem}
+.topo-k{color:var(--text-muted)}.topo-v{font-family:var(--font-mono);color:var(--text);word-break:break-all}
+/* registry */
 .reg-header{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
 .reg-status-pill{display:flex;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--border);border-radius:99px;padding:4px 12px;font-size:.7rem;font-family:var(--font-mono)}
 .reg-dot{width:7px;height:7px;border-radius:50%;background:var(--text-faint);flex-shrink:0}
@@ -95,6 +106,7 @@ main{padding:18px 20px;display:grid}
 .reg-stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:12px 14px}
 .reg-stat-val{font-family:var(--font-mono);font-size:1.6rem;font-weight:700;color:var(--reg);line-height:1}
 .reg-stat-label{font-size:.62rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.07em;margin-top:4px}
+/* tasks */
 .task-form{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 @media(max-width:640px){.task-form{grid-template-columns:1fr}}
 .task-status-label{font-size:.75rem;color:var(--text-muted)}
@@ -117,6 +129,7 @@ main{padding:18px 20px;display:grid}
 .task-response-box{background:var(--surface3);border:1px solid var(--divider);border-radius:var(--radius);padding:10px 12px;font-size:.82rem;color:var(--text);line-height:1.7;white-space:pre-wrap;max-height:320px;overflow-y:auto}
 .task-error-box{background:var(--error-bg);border:1px solid var(--error);border-radius:var(--radius);padding:10px 12px;font-size:.75rem;color:var(--error);font-family:var(--font-mono);white-space:pre-wrap}
 .tasks-empty{padding:40px;text-align:center;color:var(--text-faint);font-size:.8rem}
+/* logs */
 .log-tabs{display:flex;gap:4px;flex-wrap:wrap}
 .lt{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:4px 11px;cursor:pointer;font-size:.72rem;font-weight:600;color:var(--text-muted);transition:all var(--tr);font-family:var(--font-body)}
 .lt:hover{background:var(--surface3);color:var(--text)}
@@ -148,8 +161,10 @@ main{padding:18px 20px;display:grid}
 .pulse{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--success);animation:pulse 2s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 .log-empty{padding:40px;text-align:center;color:var(--text-faint);font-size:.78rem}
+/* diag */
 .diag-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
 .diag-out{margin-top:8px;padding:9px;border-radius:var(--radius);background:var(--surface2);font-family:var(--font-mono);font-size:.68rem;color:var(--text-muted);white-space:pre-wrap;min-height:44px;border:1px solid var(--divider);max-height:220px;overflow-y:auto}
+/* setup */
 .setup-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 @media(max-width:680px){.setup-grid{grid-template-columns:1fr}}
 .setup-footer{display:flex;gap:8px;justify-content:flex-end;padding-top:10px;border-top:1px solid var(--divider)}
@@ -158,6 +173,7 @@ main{padding:18px 20px;display:grid}
 .legacy-body{display:none;padding-top:10px;border-top:1px solid var(--divider);margin-top:4px}
 .legacy-body.open{display:block}
 .legacy-warn{background:var(--warning-bg);border:1px solid var(--warning);border-radius:var(--radius);padding:7px 11px;font-size:.7rem;color:var(--warning);margin-bottom:10px}
+/* modal */
 .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:300;align-items:center;justify-content:center}
 .modal-overlay.open{display:flex}
 .modal{background:var(--surface);border:1px solid var(--border);border-radius:13px;padding:22px;min-width:340px;max-width:480px;width:90%}
@@ -175,10 +191,11 @@ main{padding:18px 20px;display:grid}
 <header>
   <div class="logo">
     <svg width="26" height="26" viewBox="0 0 28 28" fill="none"><polygon points="14,2 26,9 26,19 14,26 2,19 2,9" stroke="currentColor" stroke-width="1.5" fill="none"/><circle cx="14" cy="14" r="3.5" fill="currentColor" opacity=".75"/><line x1="14" y1="2" x2="14" y2="10.5" stroke="currentColor" stroke-width="1"/><line x1="26" y1="9" x2="17.5" y2="13" stroke="currentColor" stroke-width="1"/><line x1="26" y1="19" x2="17.5" y2="15" stroke="currentColor" stroke-width="1"/><line x1="14" y1="26" x2="14" y2="17.5" stroke="currentColor" stroke-width="1"/><line x1="2" y1="19" x2="10.5" y2="15" stroke="currentColor" stroke-width="1"/><line x1="2" y1="9" x2="10.5" y2="13" stroke="currentColor" stroke-width="1"/></svg>
-    HyperSpace AGI <span class="vbadge">v0.2</span>
+    HyperSpace AGI <span class="vbadge">v1.02</span>
   </div>
   <nav>
     <button class="active" onclick="showPanel('nodes',this)">&#127760; Mesh Nodes</button>
+    <button onclick="showPanel('topology',this)">&#128202; Topology</button>
     <button onclick="showPanel('registry',this)">&#128196; Registry</button>
     <button onclick="showPanel('tasks',this)">&#128640; Tasks</button>
     <button onclick="showPanel('logs',this)">&#128203; Logs</button>
@@ -202,12 +219,44 @@ main{padding:18px 20px;display:grid}
 </div>
 
 <main>
+<!-- MESH NODES -->
 <div id="panel-nodes" class="panel active">
   <div class="sec-title">Mesh Nodes &#8212; Live</div>
   <div class="row"><button class="btn btn-ghost btn-sm" onclick="refreshNodes()">&#8634; Refresh</button><span style="font-size:.7rem;color:var(--text-muted)" id="nodesCount"></span></div>
   <div class="nodes-grid" id="nodesGrid"><div class="nodes-empty">Loading nodes&#8230;</div></div>
 </div>
 
+<!-- TOPOLOGY -->
+<div id="panel-topology" class="panel">
+  <div class="sec-title">Mesh Topology &#8212; Grafo PEX</div>
+  <div class="row">
+    <button class="btn btn-ghost btn-sm" onclick="loadTopology()">&#8634; Refresh</button>
+    <button class="btn btn-ghost btn-sm" onclick="if(cy)cy.fit()">&#8251; Fit</button>
+    <button class="btn btn-ghost btn-sm" onclick="reLayout()">&#10227; Re-layout</button>
+    <span style="font-size:.7rem;color:var(--text-muted)" id="topoInfo"></span>
+  </div>
+  <div class="topo-wrap">
+    <div id="cyCanvas"></div>
+    <div class="topo-sidebar">
+      <div class="topo-detail" id="topoDetail">
+        <div class="topo-detail-title">&#128270; Select a node</div>
+        <div style="color:var(--text-muted);font-size:.68rem">Click a node in the graph to see its details.</div>
+      </div>
+      <div class="card" style="padding:10px">
+        <div style="font-size:.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.09em;margin-bottom:8px">Legend</div>
+        <div style="display:flex;flex-direction:column;gap:5px;font-size:.7rem">
+          <div style="display:flex;align-items:center;gap:7px"><span style="width:12px;height:12px;border-radius:50%;background:var(--root);display:inline-block"></span>root</div>
+          <div style="display:flex;align-items:center;gap:7px"><span style="width:12px;height:12px;border-radius:50%;background:var(--hub);display:inline-block"></span>hub</div>
+          <div style="display:flex;align-items:center;gap:7px"><span style="width:12px;height:12px;border-radius:50%;background:var(--leaf);display:inline-block"></span>leaf</div>
+          <div style="display:flex;align-items:center;gap:7px;margin-top:4px"><span style="width:20px;height:2px;background:var(--primary);display:inline-block"></span>active edge</div>
+          <div style="display:flex;align-items:center;gap:7px"><span style="width:20px;height:2px;background:var(--border);display:inline-block"></span>stale edge</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- REGISTRY -->
 <div id="panel-registry" class="panel">
   <div class="sec-title">Registry &#8212; Nodi Registrati</div>
   <div class="reg-header">
@@ -228,6 +277,7 @@ main{padding:18px 20px;display:grid}
   </div>
 </div>
 
+<!-- TASKS -->
 <div id="panel-tasks" class="panel">
   <div class="sec-title">Task History</div>
   <div class="card">
@@ -250,6 +300,7 @@ main{padding:18px 20px;display:grid}
   <div id="taskHistory"><div class="tasks-empty">Nessun task ancora.</div></div>
 </div>
 
+<!-- LOGS -->
 <div id="panel-logs" class="panel">
   <div class="sec-title">Log Viewer</div>
   <div class="log-tabs">
@@ -266,19 +317,23 @@ main{padding:18px 20px;display:grid}
     <select class="sel" id="fStatus" onchange="refreshLogs()"><option value="">All</option><option>success</option><option>failed</option><option>warning</option><option>pending</option><option>info</option></select>
     <input class="inp" id="fQ" placeholder="Search..." oninput="refreshLogs()" style="flex:1;min-width:140px"/>
     <label style="display:flex;align-items:center;gap:5px;font-size:.72rem;color:var(--text-muted);cursor:pointer"><input type="checkbox" id="autoScroll" checked> Auto-scroll</label>
+    <button class="btn btn-success btn-sm" onclick="exportLogs('json')">&#8659; JSON</button>
+    <button class="btn btn-success btn-sm" onclick="exportLogs('csv')">&#8659; CSV</button>
     <button class="btn btn-danger btn-sm" onclick="clearLogs()">Clear</button>
   </div>
   <div class="log-wrap">
     <div class="log-thead"><span>Timestamp</span><span>Type</span><span>Source</span><span>Target</span><span>Status</span><span>Summary</span></div>
     <div class="log-body" id="logBody"><div class="log-empty">No events yet.</div></div>
-    <div class="log-footer"><span class="pulse"></span><span id="logCount">0 events</span><span style="margin-left:auto" id="logLast">&#8212;</span></div>
+    <div class="log-footer"><span class="pulse"></span><span id="logCount">0 events</span><span id="logTotal" style="margin-left:6px;color:var(--text-faint)"></span><span style="margin-left:auto" id="logLast">&#8212;</span></div>
   </div>
 </div>
 
+<!-- DIAGNOSTICS -->
 <div id="panel-diag" class="panel">
   <div class="sec-title">Diagnostics</div>
   <div class="diag-grid">
     <div class="card"><div class="card-title">&#128225; Mesh Nodes Raw</div><button class="btn btn-ghost btn-sm" onclick="diagMeshNodes()">Fetch</button><div class="diag-out" id="dMesh"></div></div>
+    <div class="card"><div class="card-title">&#128202; Topology Raw</div><button class="btn btn-primary btn-sm" onclick="diagTopology()">Fetch</button><div class="diag-out" id="dTopo"></div></div>
     <div class="card"><div class="card-title">&#128196; Registry Raw</div><button class="btn btn-reg btn-sm" onclick="diagRegistry()">Fetch</button><div class="diag-out" id="dReg"></div></div>
     <div class="card"><div class="card-title">&#129302; Ollama Status</div><button class="btn btn-success btn-sm" onclick="checkOllama()">Check</button><div class="diag-out" id="dOllama"></div></div>
     <div class="card"><div class="card-title">&#128173; Simulate Dream</div>
@@ -294,6 +349,7 @@ main{padding:18px 20px;display:grid}
   </div>
 </div>
 
+<!-- SETUP -->
 <div id="panel-setup" class="panel">
   <div class="sec-title">Setup</div>
   <div class="card"><div class="card-title">&#129302; Ollama</div>
@@ -340,6 +396,7 @@ main{padding:18px 20px;display:grid}
 </div>
 </main>
 
+<!-- OLLAMA MODAL -->
 <div class="modal-overlay" id="ollamaModal" onclick="if(event.target===this)closeModal()">
   <div class="modal">
     <div class="modal-title"><span class="ollama-dot" id="modalDot"></span>&#129302; Ollama<button class="modal-close" onclick="closeModal()">&#10005; Close</button></div>
@@ -351,27 +408,32 @@ main{padding:18px 20px;display:grid}
 </div>
 
 <script>
+// Theme
 (function(){
   var r=document.documentElement,btn=document.getElementById('themeBtn');
   var d='dark'; r.setAttribute('data-theme',d);
   btn.addEventListener('click',function(){d=d==='dark'?'light':'dark';r.setAttribute('data-theme',d);});
 })();
 
+// Clock
 function tick(){document.getElementById('clock').textContent=new Date().toISOString().replace('T',' ').slice(0,19)+' UTC';}
 setInterval(tick,1000); tick();
 
+// Panel switch
 function showPanel(name,btn){
   document.querySelectorAll('.panel').forEach(function(p){p.classList.remove('active');});
   document.querySelectorAll('nav button').forEach(function(b){b.classList.remove('active');});
   document.getElementById('panel-'+name).classList.add('active');
   btn.classList.add('active');
   if(name==='nodes')refreshNodes();
+  if(name==='topology')loadTopology();
   if(name==='registry')refreshRegistry();
   if(name==='tasks')refreshTaskHistory();
   if(name==='logs')refreshLogs();
   if(name==='setup')loadCfg();
 }
 
+// HB Bar
 async function refreshHbBar(){
   try{
     var d=await(await fetch('/hb/status')).json();
@@ -385,11 +447,13 @@ async function refreshHbBar(){
 }
 setInterval(refreshHbBar,5000); refreshHbBar();
 
+// Helpers
 function tierClass(t){return t==='root'?'tier-root':t==='hub'?'tier-hub':'tier-leaf';}
 function statusDotClass(s){return s==='active'?'active':s==='unreachable'?'unreachable':'unknown';}
 function formatUptime(s){if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';return Math.floor(s/3600)+'h '+Math.floor((s%3600)/60)+'m';}
 function escH(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
+// Nodes
 async function refreshNodes(){
   try{
     var nodes=await(await fetch('/mesh/nodes')).json();
@@ -419,10 +483,97 @@ async function refreshNodes(){
         +'<span class="peer-tag" title="'+escH(n.public_key||'')+'">'+escH((n.public_key||'').slice(0,20))+'&hellip;</span>'
         +'</div></div>';
     }).join('');
-  }catch(e){document.getElementById('nodesGrid').innerHTML='<div class="nodes-empty">Error: '+e.message+'</div>';}
+  }catch(e){document.getElementById('nodesGrid').innerHTML='<div class="nodes-empty">Error: '+escH(e.message)+'</div>';}
 }
 setInterval(refreshNodes,15000); refreshNodes();
 
+// ── TOPOLOGY (Cytoscape.js) ─────────────────────────────────────────
+var cy=null;
+var _topoAutoRefresh=null;
+
+var TIER_COLOR={root:'#f06292',hub:'#4dd0e1',leaf:'#81c784'};
+
+async function loadTopology(){
+  try{
+    var data=await(await fetch('/mesh/topology')).json();
+    var nodes=data.nodes||[]; var edges=data.edges||[];
+    document.getElementById('topoInfo').textContent=nodes.length+' nodes, '+edges.length+' edges';
+
+    var cyNodes=nodes.map(function(n){
+      var tier=n.tier||'leaf';
+      var label=(n.id||'?').slice(0,10);
+      return {data:{id:n.id,label:label,tier:tier,endpoint:n.endpoint||'',status:n.status||'active',
+        peers_active:n.peers_active||0,uptime_s:n.uptime_s||0,version:n.version||''},
+        style:{'background-color':TIER_COLOR[tier]||'#81c784',
+          'opacity':n.status==='unreachable'?0.35:1}};
+    });
+    var cyEdges=edges.map(function(e,i){
+      return {data:{id:'e'+i,source:e.source,target:e.target,active:e.active!==false}};
+    });
+
+    if(cy){cy.destroy();}
+    cy=cytoscape({
+      container:document.getElementById('cyCanvas'),
+      elements:{nodes:cyNodes,edges:cyEdges},
+      style:[
+        {selector:'node',style:{
+          'label':'data(label)',
+          'color':'#fff','font-size':'10px','font-family':"'JetBrains Mono',monospace",
+          'text-valign':'center','text-halign':'center',
+          'width':44,'height':44,
+          'border-width':2,'border-color':'rgba(255,255,255,.15)',
+          'text-outline-color':'rgba(0,0,0,.5)','text-outline-width':2
+        }},
+        {selector:'node:selected',style:{'border-width':3,'border-color':'#fff'}},
+        {selector:'edge',style:{
+          'width':1.5,
+          'line-color':'function(e){return e.data("active")?"#4f98a3":"#272b33";}',
+          'curve-style':'bezier','opacity':0.7
+        }},
+        {selector:'edge[?active]',style:{'line-color':'#4f98a3','opacity':0.8}},
+        {selector:'edge[!active]',style:{'line-color':'#272b33','opacity':0.4}}
+      ],
+      layout:{name:'cose',animate:true,animationDuration:600,
+        nodeRepulsion:8000,gravity:0.3,edgeElasticity:100,
+        idealEdgeLength:140,padding:30}
+    });
+
+    cy.on('tap','node',function(e){
+      var nd=e.target.data();
+      document.getElementById('topoDetail').innerHTML=
+        '<div class="topo-detail-title">&#128187; '+escH(nd.label)+'&hellip;</div>'
+        +'<div class="topo-kv">'
+        +'<span class="topo-k">id</span><span class="topo-v">'+escH(nd.id)+'</span>'
+        +'<span class="topo-k">tier</span><span class="topo-v"><span class="tier-badge '+tierClass(nd.tier)+'">'+escH(nd.tier)+'</span></span>'
+        +'<span class="topo-k">endpoint</span><span class="topo-v">'+escH(nd.endpoint)+'</span>'
+        +'<span class="topo-k">status</span><span class="topo-v">'+escH(nd.status)+'</span>'
+        +'<span class="topo-k">peers</span><span class="topo-v">'+escH(nd.peers_active)+'</span>'
+        +'<span class="topo-k">uptime</span><span class="topo-v">'+formatUptime(nd.uptime_s)+'</span>'
+        +'<span class="topo-k">version</span><span class="topo-v">'+escH(nd.version)+'</span>'
+        +'</div>';
+    });
+    cy.on('tap',function(e){if(e.target===cy)document.getElementById('topoDetail').innerHTML='<div class="topo-detail-title">&#128270; Select a node</div><div style="color:var(--text-muted);font-size:.68rem">Click a node in the graph to see its details.</div>';});
+
+    // auto-refresh ogni 20s
+    clearInterval(_topoAutoRefresh);
+    _topoAutoRefresh=setInterval(function(){
+      var panel=document.getElementById('panel-topology');
+      if(panel&&panel.classList.contains('active'))loadTopology();
+    },20000);
+
+  }catch(err){
+    document.getElementById('topoInfo').textContent='Error: '+err.message;
+  }
+}
+
+function reLayout(){
+  if(!cy)return;
+  cy.layout({name:'cose',animate:true,animationDuration:500,
+    nodeRepulsion:8000,gravity:0.3,edgeElasticity:100,
+    idealEdgeLength:140,padding:30}).run();
+}
+
+// Registry
 async function refreshRegistry(){
   try{
     var rh=await(await fetch('/registry/health')).json();
@@ -442,34 +593,31 @@ async function refreshRegistry(){
     var tbody=document.getElementById('regTableBody');
     if(!nodes.length){tbody.innerHTML='<tr><td colspan="7" class="reg-empty">Nessun nodo registrato.</td></tr>';return;}
     tbody.innerHTML=nodes.map(function(n){
-      var nid=escH((n.node_id||'?').slice(0,32));
-      var ep=escH(n.endpoint||'');
       var tier=n.tier||'leaf';
       var st=n.status||'unknown';
       var stColor=st==='active'?'var(--success)':st==='unreachable'?'var(--error)':'var(--text-faint)';
-      var ver=escH(n.version||'');
       var up=n.uptime_s?formatUptime(n.uptime_s):'';
       var ls=n.last_seen?(n.last_seen.replace('T',' ').slice(0,19)):'';
       return '<tr>'
         +'<td><span class="reg-id" title="'+escH(n.node_id||'')+'">'+(n.node_id||'?').slice(0,20)+'&hellip;</span></td>'
-        +'<td><span class="reg-ep">'+ep+'</span></td>'
+        +'<td><span class="reg-ep">'+escH(n.endpoint||'')+'</span></td>'
         +'<td><span class="tier-badge '+tierClass(tier)+'">'+tier+'</span></td>'
         +'<td><span style="color:'+stColor+';font-family:var(--font-mono);font-size:.68rem">'+st+'</span></td>'
-        +'<td><span style="font-family:var(--font-mono);font-size:.68rem;color:var(--text-muted)">'+ver+'</span></td>'
+        +'<td><span style="font-family:var(--font-mono);font-size:.68rem;color:var(--text-muted)">'+escH(n.version||'')+'</span></td>'
         +'<td><span style="font-family:var(--font-mono);font-size:.68rem">'+up+'</span></td>'
         +'<td class="reg-ts">'+ls+'</td>'
         +'</tr>';
     }).join('');
-  }catch(e){document.getElementById('regTableBody').innerHTML='<tr><td colspan="7" class="reg-empty">Errore: '+e.message+'</td></tr>';}
+  }catch(e){document.getElementById('regTableBody').innerHTML='<tr><td colspan="7" class="reg-empty">Errore: '+escH(e.message)+'</td></tr>';}
 }
 setInterval(function(){var p=document.getElementById('panel-registry');if(p&&p.classList.contains('active'))refreshRegistry();},10000);
 
+// Task helpers
 function statusBadge(s){
   var map={done:'ts-done',failed:'ts-failed',assigned:'ts-assigned',created:'ts-created'};
   var emoji={done:'&#10003;',failed:'&#10007;',assigned:'&#8987;',created:'&#9679;'};
   return '<span class="task-status-badge '+(map[s]||'ts-created')+'">'+(emoji[s]||'')+' '+s+'</span>';
 }
-
 function renderTaskCard(t){
   var id=t.id||'?';
   var node=(t.node||'').slice(0,16);
@@ -498,7 +646,6 @@ function renderTaskCard(t){
     +'<div class="task-section"><div class="task-section-title">Risposta</div>'+responseHTML+'</div>'
     +'</div></div>';
 }
-
 document.addEventListener('click',function(e){
   var hdr=e.target.closest('.task-header[data-tbid]');
   if(hdr){var el=document.getElementById(hdr.dataset.tbid);if(el)el.classList.toggle('open');}
@@ -517,7 +664,6 @@ async function createTask(){
   document.getElementById('taskStatus').textContent=d.message||'';
   refreshTaskHistory();
 }
-
 async function createAndAssign(){
   var id=document.getElementById('tId').value.trim();
   var prompt=document.getElementById('tPrompt').value.trim();
@@ -530,7 +676,6 @@ async function createAndAssign(){
   document.getElementById('taskStatus').textContent=d.error?'Errore: '+d.error:'Completato';
   refreshTaskHistory();
 }
-
 async function refreshTaskHistory(){
   var data=await(await fetch('/tasks')).json();
   var list=Object.values(data).reverse();
@@ -543,6 +688,7 @@ async function refreshTaskHistory(){
 }
 setInterval(refreshTaskHistory,5000);
 
+// Logs
 var curType='';
 function setTab(type,btn){
   curType=type;
@@ -550,54 +696,70 @@ function setTab(type,btn){
   btn.classList.add('active');
   refreshLogs();
 }
-
 async function refreshLogs(){
   var node=document.getElementById('fNode').value.trim();
   var status=document.getElementById('fStatus').value;
   var q=document.getElementById('fQ').value.trim();
-  var url='/logs?';
+  var url='/logs?per_page=200&';
   if(curType)url+='type='+curType+'&';
   if(node)url+='node='+encodeURIComponent(node)+'&';
   if(status)url+='status='+status+'&';
   if(q)url+='q='+encodeURIComponent(q)+'&';
-  try{var logs=await(await fetch(url)).json();renderLogs(logs);}catch(e){}
+  try{
+    var res=await(await fetch(url)).json();
+    var logs=res.logs||res; // compatibile con risposta array legacy
+    var total=res.total;
+    renderLogs(logs,total);
+  }catch(e){}
 }
-
-function renderLogs(logs){
+function renderLogs(logs,total){
   var body=document.getElementById('logBody');
   document.getElementById('logCount').textContent=logs.length+' events';
+  if(total!==undefined)document.getElementById('logTotal').textContent='('+total+' total)';
   document.getElementById('logLast').textContent='Updated '+new Date().toISOString().slice(11,19)+' UTC';
   if(!logs.length){body.innerHTML='<div class="log-empty">No events.</div>';return;}
   var stEmoji={success:'&#10003;',failed:'&#10007;',warning:'&#9888;',pending:'&#8987;',info:'&#9432;'};
   body.innerHTML=logs.map(function(l,i){
+    var src=l.sourceNode||l.source||'--';
+    var tgt=l.targetNode||l.target||'--';
     return '<div class="log-row" data-lid="ld'+i+'">'
-      +'<span class="ts">'+escH(l.ts.replace('T',' ').slice(0,19))+'</span>'
-      +'<span><span class="tbadge tb-'+l.type+'">'+escH(l.type.replace(/_/g,' '))+'</span></span>'
-      +'<span class="nc">'+escH(l.sourceNode||'--')+'</span>'
-      +'<span class="nc">'+escH(l.targetNode||'--')+'</span>'
-      +'<span><span class="sbadge st-'+l.status+'">'+(stEmoji[l.status]||'')+' '+escH(l.status)+'</span></span>'
-      +'<span class="summary">'+escH(l.summary)+'</span>'
+      +'<span class="ts">'+escH((l.ts||'').replace('T',' ').slice(0,19))+'</span>'
+      +'<span><span class="tbadge tb-'+(l.type||'system')+'">'+escH((l.type||'system').replace(/_/g,' '))+'</span></span>'
+      +'<span class="nc">'+escH(src)+'</span>'
+      +'<span class="nc">'+escH(tgt)+'</span>'
+      +'<span><span class="sbadge st-'+(l.status||'info')+'">'+(stEmoji[l.status||'info']||'')+' '+escH(l.status||'info')+'</span></span>'
+      +'<span class="summary">'+escH(l.summary||'')+'</span>'
       +'</div>'
-      +'<div class="detail-row" id="ld'+i+'"><b>TraceID:</b> '+escH(l.traceId)+' | <b>ID:</b> '+escH(l.id)+' <b>Detail:</b> '+escH(l.detail||'--')+'</div>';
+      +'<div class="detail-row" id="ld'+i+'"><b>TraceID:</b> '+escH(l.traceId||l.trace_id||'')+'&nbsp;|&nbsp;<b>ID:</b> '+escH(l.id||l.log_id||'')+'&nbsp;<b>Detail:</b> '+escH(l.detail||'--')+'</div>';
   }).join('');
   if(document.getElementById('autoScroll').checked)body.scrollTop=body.scrollHeight;
 }
-
+function exportLogs(fmt){
+  var node=document.getElementById('fNode').value.trim();
+  var status=document.getElementById('fStatus').value;
+  var q=document.getElementById('fQ').value.trim();
+  var url='/logs/export?format='+fmt;
+  if(curType)url+='&type='+curType;
+  if(node)url+='&node='+encodeURIComponent(node);
+  if(status)url+='&status='+status;
+  if(q)url+='&q='+encodeURIComponent(q);
+  window.open(url,'_blank');
+}
 async function clearLogs(){await fetch('/logs/clear',{method:'POST'});refreshLogs();}
 setInterval(refreshLogs,5000);
 
+// Diagnostics
 async function diagMeshNodes(){document.getElementById('dMesh').textContent='...';var d=await(await fetch('/mesh/nodes')).json();document.getElementById('dMesh').textContent=JSON.stringify(d,null,2);}
+async function diagTopology(){document.getElementById('dTopo').textContent='...';var d=await(await fetch('/mesh/topology')).json();document.getElementById('dTopo').textContent=JSON.stringify(d,null,2);}
 async function diagRegistry(){document.getElementById('dReg').textContent='...';var d=await(await fetch('/registry/nodes')).json();document.getElementById('dReg').textContent=JSON.stringify(d,null,2);}
 async function checkOllama(){document.getElementById('dOllama').textContent='...';var d=await(await fetch('/ollama/status')).json();document.getElementById('dOllama').textContent=JSON.stringify(d,null,2);}
 async function checkHb(){var d=await(await fetch('/hb/status')).json();document.getElementById('dHb').textContent=JSON.stringify(d,null,2);}
-
 async function sendDream(){
   var node=document.getElementById('drNode').value.trim()||'node-sim';
   var sum=document.getElementById('drText').value.trim()||'Autonomous cycle';
   var r=await fetch('/logs/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'dream',summary:sum,sourceNode:node,status:'info',detail:'Injected via Diagnostics'})});
   document.getElementById('dDream').textContent=JSON.stringify(await r.json(),null,2);
 }
-
 async function sendChat(){
   var from=document.getElementById('chFrom').value.trim()||'node-a';
   var to=document.getElementById('chTo').value.trim()||'node-b';
@@ -605,7 +767,6 @@ async function sendChat(){
   var r=await fetch('/logs/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'node_chat',summary:from+' -> '+to+': '+msg,sourceNode:from,targetNode:to,status:'info',detail:'Injected'})});
   document.getElementById('dChat').textContent=JSON.stringify(await r.json(),null,2);
 }
-
 async function pingAll(){
   document.getElementById('dPing').textContent='Pinging...';
   var nodes=await(await fetch('/mesh/nodes')).json();
@@ -621,6 +782,7 @@ async function pingAll(){
   document.getElementById('dPing').textContent=JSON.stringify(res,null,2);
 }
 
+// Ollama pill
 async function checkOllamaDot(){
   try{
     var d=await(await fetch('/ollama/status')).json();
@@ -630,10 +792,8 @@ async function checkOllamaDot(){
   }catch(e){}
 }
 setInterval(checkOllamaDot,30000); checkOllamaDot();
-
 function openOllamaModal(){document.getElementById('ollamaModal').classList.add('open');checkOllamaModal();}
 function closeModal(){document.getElementById('ollamaModal').classList.remove('open');}
-
 async function checkOllamaModal(){
   var d=await(await fetch('/ollama/status')).json();
   document.getElementById('modalUrl').textContent=d.url||'--';
@@ -646,6 +806,7 @@ async function checkOllamaModal(){
   }else{dot.className='ollama-dot err';list.innerHTML='';err.textContent='Error: '+(d.error||'unreachable');err.style.display='block';}
 }
 
+// Setup
 async function loadCfg(){
   var c=await(await fetch('/config/advanced')).json();
   document.getElementById('oUrl').value=(c.ollama&&c.ollama.url)||'';
@@ -655,7 +816,6 @@ async function loadCfg(){
   document.getElementById('rsAt').textContent=(c.security&&c.security.secretRotatedAt)?'Last rotated: '+c.security.secretRotatedAt.slice(0,10):'';
   document.getElementById('aUrl').value=(c._authority&&c._authority.serverUrl)||'';
 }
-
 async function saveCfg(){
   var eps=document.getElementById('meshEps').value.split('\n').map(function(s){return s.trim();}).filter(Boolean);
   var payload={
@@ -667,22 +827,16 @@ async function saveCfg(){
   var d=await(await fetch('/config/advanced',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
   showMsg(d.ok?'Salvato':'Errore');
 }
-
 async function rotateSecret(){
   var d=await(await fetch('/config/secret/rotate',{method:'POST'})).json();
   if(d.ok)showMsg('Segreto ruotato: '+d.secret.slice(0,8)+'...');
 }
-
 function toggleSec(btn){
   var inp=document.getElementById('secVal');
   inp.type=inp.type==='password'?'text':'password';
   btn.textContent=inp.type==='password'?'Show':'Hide';
 }
-
-function toggleLegacy(){
-  document.getElementById('legacyBody').classList.toggle('open');
-}
-
+function toggleLegacy(){document.getElementById('legacyBody').classList.toggle('open');}
 async function testAuthority(){
   var url=document.getElementById('aUrl').value.trim();
   var out=document.getElementById('sAuthTest');
@@ -692,7 +846,6 @@ async function testAuthority(){
     out.textContent='OK: '+r.status;
   }catch(e){out.textContent='Errore: '+e.message;}
 }
-
 function showMsg(msg){
   var el=document.getElementById('saveMsg');
   el.textContent=msg;
