@@ -66,7 +66,12 @@ def calculate_tier(vram_gb: float, uptime_s: float, reputation: float = 0.5) -> 
     if vram_gb >= 4.0:     return "hub"
     return "leaf"
 
-VRAM_GB = detect_vram_gb()
+# VRAM: prima legge dal .env (utile quando nvidia-smi non è nel container),
+# poi prova a rilevare dal sistema. Il valore env ha precedenza se > 0.
+_vram_env = float(os.getenv("VRAM_GB", "0.0"))
+_vram_detected = detect_vram_gb()
+VRAM_GB = _vram_env if _vram_env > 0.0 else _vram_detected
+
 NODE_CAPABILITIES = ["execute"]
 if VRAM_GB > 0 or os.getenv("OLLAMA_URL"):
     NODE_CAPABILITIES.append("ollama")
@@ -259,7 +264,9 @@ async def startup_event():
     print(f"[NODE:{NODE_ID[:10]}] started v1.02.0")
     print(f"[NODE:{NODE_ID[:10]}] tier={NODE_PROFILE['tier']} (forced={_FORCED_TIER or 'no'})")
     print(f"[NODE:{NODE_ID[:10]}] advertised={NODE_ADVERTISED_ENDPOINT}")
-    print(f"[NODE:{NODE_ID[:10]}] ollama-proxy -> porta 11435 (punta WebUI qui)")
+    print(f"[NODE:{NODE_ID[:10]}] vram_gb={VRAM_GB} (env={_vram_env} detected={_vram_detected})")
+    print(f"[NODE:{NODE_ID[:10]}] boot_peers={BOOT_PEERS}")
+    print(f"[NODE:{NODE_ID[:10]}] ollama -> {OLLAMA_URL}")
 
 # ── MIDDLEWARE firma ───────────────────────────────────────
 SIGNED_PATHS = {"/announce", "/execute", "/peer/add", "/verify"}
@@ -293,7 +300,7 @@ def status():
         "tier":         NODE_PROFILE["tier"],
         "version":      NODE_PROFILE["version"],
         "endpoint":     NODE_ADVERTISED_ENDPOINT,
-        "capabilities": NODE_PROFILE["capabilities"],
+        "capabilities": NODE_CAPABILITIES,
         "vram_gb":      VRAM_GB,
         "uptime_s":     int(time.time() - _boot_time),
         "peers_active": len([p for p in _peers.values() if p["status"] == "active"]),
