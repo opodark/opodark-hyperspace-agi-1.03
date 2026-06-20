@@ -1,18 +1,28 @@
 version: '3.8'
 
 # ============================================================
-# HyperSpace AGI v1.01 — Compose Unico
-# Tutti i nodi usano la stessa immagine.
-# Il tier (root/hub/leaf) viene calcolato al boot — non hardcodato.
-# Discovery dinamica tramite Registry (http://registry:8086)
-# Fallback: BOOT_PEERS P2P tramite /announce.
+# HyperSpace AGI v1.02 — Compose Unico
 #
-# Dashboard control-plane: http://localhost:8085/dashboard
-# Registry API:            http://localhost:8086/nodes
-# Node 1:                  http://localhost:8081
+# USAGE — scegli UN solo profilo GPU alla volta:
 #
-# Setup locale semplificato: un solo nodo attivo sulla macchina.
-# Il secondo nodo è lasciato commentato più sotto come template.
+#   CPU only (default):
+#     docker compose --profile cpu up -d
+#
+#   NVIDIA GPU:
+#     docker compose --profile nvidia up -d
+#
+#   AMD ROCm:
+#     docker compose --profile amd up -d
+#
+#   Intel GPU:
+#     docker compose --profile intel up -d
+#
+#   Vulkan:
+#     docker compose --profile vulkan up -d
+#
+# Dashboard:  http://localhost:8085/dashboard
+# Registry:   http://localhost:8086/nodes
+# Node 1:     http://localhost:8081
 # ============================================================
 
 services:
@@ -39,10 +49,12 @@ services:
       retries: 5
       start_period: 20s
 
-  # ── Ollama (CPU default) ─────────────────────────────
+  # ── Ollama CPU (profile: cpu) ────────────────────────
+  # Avvio: docker compose --profile cpu up -d
   ollama:
     image: ollama/ollama:latest
     container_name: hyperspace_ollama
+    profiles: ["cpu"]
     ports:
       - "11434:11434"
     volumes:
@@ -54,6 +66,8 @@ services:
       - hyperspace
 
   # ── Ollama NVIDIA GPU (profile: nvidia) ─────────────
+  # Avvio: docker compose --profile nvidia up -d
+  # Richiede: NVIDIA Container Toolkit installato
   ollama-nvidia:
     image: ollama/ollama:latest
     container_name: hyperspace_ollama_nvidia
@@ -78,6 +92,7 @@ services:
       - hyperspace
 
   # ── Ollama AMD ROCm (profile: amd) ──────────────────
+  # Avvio: docker compose --profile amd up -d
   ollama-amd:
     image: ollama/ollama:rocm
     container_name: hyperspace_ollama_amd
@@ -98,6 +113,7 @@ services:
       - hyperspace
 
   # ── Ollama Intel GPU (profile: intel) ───────────────
+  # Avvio: docker compose --profile intel up -d
   ollama-intel:
     image: ollama/ollama:latest
     container_name: hyperspace_ollama_intel
@@ -118,6 +134,7 @@ services:
       - hyperspace
 
   # ── Ollama Vulkan GPU (profile: vulkan) ──────────────
+  # Avvio: docker compose --profile vulkan up -d
   ollama-vulkan:
     image: ollama/ollama:latest
     container_name: hyperspace_ollama_vulkan
@@ -140,13 +157,12 @@ services:
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: hyperspace_open_webui
-    depends_on: [ollama]
     ports:
       - "3000:8080"
     volumes:
       - open_webui_data:/app/backend/data
     environment:
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-hyperspace-secret-key-32chars-ok!}
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -171,19 +187,16 @@ services:
       PYTHONUNBUFFERED: "1"
       NODE_ENDPOINTS: "node-1:8084"
       REGISTRY_URL: "http://registry:8086"
-      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3}
+      INFERENCE_BACKEND: ${INFERENCE_BACKEND:-ollama}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
       - hyperspace
     restart: unless-stopped
 
-  # ─────────────────────────────────────────────
-  # NODI — stessa immagine, tier calcolato al boot
-  # Setup locale di default: solo node-1 attivo.
-  # ─────────────────────────────────────────────
-
+  # ── Nodo 1 ───────────────────────────────────────────
   node-1:
     build:
       context: .
@@ -203,7 +216,7 @@ services:
       PUBLIC_ENDPOINT: ${PUBLIC_ENDPOINT:-}
       REGISTRY_URL: "http://registry:8086"
       HEARTBEAT_INTERVAL: "${HEARTBEAT_INTERVAL:-30}"
-      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3}
       BOOT_PEERS: ""
       PYTHONUNBUFFERED: "1"
@@ -232,7 +245,7 @@ services:
 #      PUBLIC_ENDPOINT: ${PUBLIC_ENDPOINT:-}
 #      REGISTRY_URL: "http://registry:8086"
 #      HEARTBEAT_INTERVAL: "${HEARTBEAT_INTERVAL:-30}"
-#      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+#      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
 #      OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3}
 #      BOOT_PEERS: "node-1:8084"
 #      PYTHONUNBUFFERED: "1"
