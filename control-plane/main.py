@@ -64,7 +64,7 @@ def _best_endpoint(node_info):
 def _node_list():
     return list(_nodes_by_id.values())
 
-# ── MODELLI: helper unificato Ollama / LM Studio ─────────────────────────────
+# ── MODELLI: helper unificato Ollama / LM Studio ────────────────────────────────
 def _fetch_models():
     """
     Ritorna lista di nomi modello indipendentemente dal backend.
@@ -501,10 +501,16 @@ def heartbeat_loop():
                      f'cycle={cycle}', source=nid, status='info')
             hb_state["last_dream"] = hb_state["last_tick"]
         if cycle % 5 == 0:
-            pool = [n.get("node_id", "")[:16] for n in _node_list()]
-            if len(pool) < 2:
-                pool = (pool + ["node-sim"])[:2]
-            src, dst    = random.sample(pool, 2)
+            # Garantiamo sempre esattamente 2 ID distinti per random.sample
+            real_ids = [n.get("node_id", "")[:16] for n in _node_list() if n.get("node_id")]
+            # Pad con simulati finche' non abbiamo 2 elementi unici
+            sim_pool = ["node-sim-A", "node-sim-B", "node-sim-C"]
+            pool = list(dict.fromkeys(real_ids + sim_pool))[:]
+            # dict.fromkeys preserva ordine e deduplica; prendiamo i primi 2 distinti
+            unique_pool = list(dict.fromkeys(pool))
+            if len(unique_pool) < 2:
+                unique_pool = ["node-sim-A", "node-sim-B"]
+            src, dst    = random.sample(unique_pool, 2)
             q, a_tpl    = random.choice(CHAT_PHRASES)
             answer      = a_tpl.format(random.randint(1, 8))
             tid         = str(uuid.uuid4())[:8]
