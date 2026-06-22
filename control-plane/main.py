@@ -1,10 +1,11 @@
 # control-plane/main.py
 # HyperSpace AGI v1.02 — Control Plane + Dashboard
 # feat: memory sync inter-nodo nell'heartbeat + smart task routing (tier/vram/load)
+# feat: memory compression — gzip + TTL/max-entries pruning
 
 from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
-import os, threading, time, requests, json, uuid, random
-from datetime import datetime
+import os, threading, time, requests, json, uuid, random, gzip
+from datetime import datetime, timedelta, timezone
 import sys
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -22,6 +23,11 @@ INFERENCE_BACKEND  = os.getenv("INFERENCE_BACKEND", "ollama")   # ollama | lmstu
 REGISTRY_URL       = os.getenv("REGISTRY_URL", "http://registry:8086")
 _AUTHORITY_URL     = os.getenv("AUTHORITY_URL", "http://authority:8080")
 _AUTHORITY_ENABLED = os.getenv("AUTHORITY_ENABLED", "false").lower() == "true"
+
+# MEMORY CONFIG
+MEMORY_FILE_GZ     = os.path.join(BASE_DIR, "memory.json.gz")
+MEMORY_TTL_DAYS    = int(os.getenv("MEMORY_TTL_DAYS", "7"))
+MEMORY_MAX_ENTRIES = int(os.getenv("MEMORY_MAX_ENTRIES", "200"))
 
 # STATE
 tasks: dict = {}
@@ -67,6 +73,48 @@ def _best_endpoint(node_info):
 
 def _node_list():
     return list(_nodes_by_id.values())
+
+# ── MEMORY: gzip + TTL/max-entries pruning ────────────────────────────────────
+
+def _load_memory() -> list:
+    """Legge il file memoria gzip. Ritorna lista vuota se non esiste o è corrotto."""
+    if not os.path.exists(MEMORY_FILE_GZ):
+        return []
+    try:
+        with gzip.open(MEMORY_FILE_GZ, "rt", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+def _save_memory(entries: list) -> None:
+    """Applica pruning e scrive la memoria su file gzip."""
+    pruned = _prune_memory(entries)
+    with gzip.open(MEMORY_FILE_GZ, "wt", encoding="utf-8") as f:
+        json.dump(pruned, f, ensure_ascii=False)
+
+def _prune_memory(entries: list) -> list:
+    """
+    1. Rimuove entry più vecchie di MEMORY_TTL_DAYS.
+    2. Tronca a MEMORY_MAX_ENTRIES (tieni le più recenti).
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=MEMORY_TTL_DAYS)
+    fresh = []
+    for e in entries:
+        ts_str = e.get("ts") or e.get("timestamp", "")
+        try:
+            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            if ts >= cutoff:
+                fresh.append(e)
+        except Exception:
+            fresh.append(e)  # entry senza timestamp valido: la teniamo
+
+    # ordina per timestamp decrescente e tronca
+    def _ts_key(e):
+        return e.get("ts") or e.get("timestamp", "")
+
+    fresh.sort(key=_ts_key, reverse=True)
+    return fresh[:MEMORY_MAX_ENTRIES]
 
 # ── SMART TASK ROUTING ────────────────────────────────────────────────────────
 # Score un nodo per lo scheduling: considera tier, VRAM, peers attivi, uptime.
@@ -453,12 +501,63 @@ def assign_task():
 def get_tasks():
     return jsonify(tasks)
 
+# ── MEMORY ENDPOINTS ──────────────────────────────────────────────────────────
+
+@app.route('/memory')
+def get_memory():
+    """Ritorna le entry di memoria locali (post-pruning)."""
+    limit = int(request.args.get("limit", MEMORY_MAX_ENTRIES))
+    entries = _load_memory()
+    return jsonify({"entries": entries[:limit], "total": len(entries)})
+
+@app.route('/memory/push', methods=['POST'])
+def push_memory():
+    """
+    Riceve una entry di memoria da un altro nodo e la persiste localmente
+    nel file gzip (con pruning automatico).
+    Body atteso: {"node_id": "...", "entry": {...}}
+    """
+    data  = request.get_json(force=True, silent=True) or {}
+    entry = data.get("entry")
+    if not entry or not isinstance(entry, dict):
+        return jsonify({"ok": False, "error": "missing entry"}), 400
+
+    entries = _load_memory()
+    # evita duplicati: confronta su ts + content hash
+    ts_key = entry.get("ts") or entry.get("timestamp", "")
+    content_key = str(entry.get("content", ""))[:64]
+    dedup_key = f"{ts_key}:{content_key}"
+    existing_keys = {
+        f"{e.get('ts') or e.get('timestamp','')}:{str(e.get('content',''))[:64]}"
+        for e in entries
+    }
+    if dedup_key not in existing_keys:
+        entries.append(entry)
+        _save_memory(entries)
+
+    return jsonify({"ok": True})
+
+@app.route('/memory/stats')
+def memory_stats():
+    """Statistiche sul file memoria: dimensione compressa, n. entry, TTL config."""
+    entries = _load_memory()
+    size_bytes = os.path.getsize(MEMORY_FILE_GZ) if os.path.exists(MEMORY_FILE_GZ) else 0
+    return jsonify({
+        "entries":          len(entries),
+        "max_entries":      MEMORY_MAX_ENTRIES,
+        "ttl_days":         MEMORY_TTL_DAYS,
+        "file_size_bytes":  size_bytes,
+        "file_size_kb":     round(size_bytes / 1024, 2),
+        "file":             MEMORY_FILE_GZ,
+    })
+
 # ── MEMORY SYNC ───────────────────────────────────────────────────────────────
 def _sync_memory_across_nodes():
     """
     Raccoglie le ultime 30 entry di memoria da ogni nodo attivo e propaga
     quelle "straniere" agli altri nodi. Usa _synced_memory_keys per evitare
     re-push di entry già sincronizzate.
+    Le entry ricevute vengono anche persistite localmente nel file gzip.
     """
     active_nodes = [n for n in _node_list() if n.get("status") == "active"]
     if len(active_nodes) < 2:
@@ -479,8 +578,11 @@ def _sync_memory_across_nodes():
     if not node_memories:
         return
 
-    # Fase 2: propagazione
-    pushed_total = 0
+    # Fase 2: propagazione + persistenza locale
+    pushed_total  = 0
+    local_entries = _load_memory()
+    local_changed = False
+
     for src_nid, entries in node_memories.items():
         for entry in entries:
             ts  = entry.get("ts") or entry.get("timestamp", "")
@@ -488,6 +590,17 @@ def _sync_memory_across_nodes():
             if key in _synced_memory_keys:
                 continue
             _synced_memory_keys.add(key)
+
+            # Persiste in locale (con dedup semplice)
+            content_key = str(entry.get("content", ""))[:64]
+            dedup_key   = f"{ts}:{content_key}"
+            existing_k  = {
+                f"{e.get('ts') or e.get('timestamp','')}:{str(e.get('content',''))[:64]}"
+                for e in local_entries
+            }
+            if dedup_key not in existing_k:
+                local_entries.append(entry)
+                local_changed = True
 
             # Invia l'entry a tutti i nodi che NON sono la sorgente
             for dst_node in active_nodes:
@@ -504,6 +617,9 @@ def _sync_memory_across_nodes():
                     pushed_total += 1
                 except Exception:
                     pass
+
+    if local_changed:
+        _save_memory(local_entries)
 
     if pushed_total > 0:
         push_log(
