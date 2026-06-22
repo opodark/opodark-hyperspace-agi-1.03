@@ -1,5 +1,6 @@
 # control-plane/main.py
 # HyperSpace AGI v1.02 — Control Plane + Dashboard
+# feat: memory sync inter-nodo nell'heartbeat + smart task routing (tier/vram/load)
 
 from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
 import os, threading, time, requests, json, uuid, random
@@ -27,9 +28,12 @@ tasks: dict = {}
 _nodes_by_id: dict  = {}
 _known_endpoints: set = set(NODE_ENDPOINTS)
 
+# Memory sync: set di (node_id, ts) già propagati per evitare re-push
+_synced_memory_keys: set = set()
+
 hb_state = {
     "cycle": 0, "last_tick": None, "last_conn": None,
-    "last_dream": None, "last_chat": None,
+    "last_dream": None, "last_chat": None, "last_memory_sync": None,
     "nodes_seen": [], "running": False,
 }
 
@@ -63,6 +67,28 @@ def _best_endpoint(node_info):
 
 def _node_list():
     return list(_nodes_by_id.values())
+
+# ── SMART TASK ROUTING ────────────────────────────────────────────────────────
+# Score un nodo per lo scheduling: considera tier, VRAM, peers attivi, uptime.
+# Tier:        root=3, hub=2, leaf=1  (peso 40%)
+# VRAM:        normalizzata su 24 GB  (peso 30%)
+# peers_active: normalizzato su 10    (peso 20%)
+# uptime_s:   normalizzato su 7gg     (peso 10%)
+
+_TIER_SCORE = {"root": 3, "hub": 2, "leaf": 1}
+
+def _node_score(node: dict) -> float:
+    tier_s   = _TIER_SCORE.get(node.get("tier", "leaf"), 1) / 3.0
+    vram_s   = min(float(node.get("vram_gb", 0)), 24.0) / 24.0
+    peers_s  = min(int(node.get("peers_active", 0)), 10) / 10.0
+    uptime_s = min(int(node.get("uptime_s", 0)), 604800) / 604800.0
+    return tier_s * 0.40 + vram_s * 0.30 + peers_s * 0.20 + uptime_s * 0.10
+
+def _select_best_node(active_nodes: list) -> dict:
+    """Ritorna il nodo con score più alto; fallback al primo disponibile."""
+    if not active_nodes:
+        return None
+    return max(active_nodes, key=_node_score)
 
 # ── MODELLI: helper unificato Ollama / LM Studio ────────────────────────────────
 def _fetch_models():
@@ -103,7 +129,7 @@ def _fetch_models():
 
 
 # LOG
-LOG_TYPES = {"connection_test", "inter_node_message", "dream", "node_chat", "system", "mesh_event"}
+LOG_TYPES = {"connection_test", "inter_node_message", "dream", "node_chat", "system", "mesh_event", "memory_sync"}
 
 def push_log(type_, summary, detail="", source="control-plane", target="", status="info", trace_id=""):
     entry = {
@@ -235,6 +261,7 @@ def mesh_topology():
             "uptime_s":     node.get("uptime_s", 0),
             "version":      node.get("version", ""),
             "status":       node.get("status", "active"),
+            "score":        round(_node_score(node), 3),
         })
         try:
             ep = _best_endpoint(node)
@@ -382,21 +409,28 @@ def assign_task():
     task_id = data.get('task_id')
     if not task_id or task_id not in tasks:
         return jsonify({"error": "Task not found"}), 404
+
     active = [n for n in _node_list() if n.get("status") == "active"]
     if not active:
         return jsonify({"error": "No active nodes"}), 503
-    public_nodes = [n for n in active if _best_endpoint(n).startswith("https://")]
-    selected     = public_nodes[0] if public_nodes else active[0]
-    endpoint     = _best_endpoint(selected)
-    node_id      = selected["node_id"]
-    task         = tasks[task_id]
+
+    # ── Smart routing: seleziona il nodo con score più alto ──
+    selected = _select_best_node(active)
+    endpoint = _best_endpoint(selected)
+    node_id  = selected["node_id"]
+    score    = round(_node_score(selected), 3)
+
+    task = tasks[task_id]
     task["status"]   = "assigned"
     task["node"]     = node_id
     task["endpoint"] = endpoint
+    task["routing_score"] = score
     db.update_task(task_id, "assigned", node_id=node_id, endpoint=endpoint)
+
     tid = str(uuid.uuid4())[:8]
     push_log('inter_node_message', f'Task {task_id} -> {node_id[:12]}',
-             f'endpoint={endpoint}', target=node_id[:12], status='pending', trace_id=tid)
+             f'endpoint={endpoint} score={score} tier={selected.get("tier","?")} vram={selected.get("vram_gb","?")}GB',
+             target=node_id[:12], status='pending', trace_id=tid)
     try:
         r = requests.post(f"{_ep_to_url(endpoint)}/execute", json=task, timeout=120)
         task["result"]       = r.json()
@@ -418,6 +452,66 @@ def assign_task():
 @app.route('/tasks')
 def get_tasks():
     return jsonify(tasks)
+
+# ── MEMORY SYNC ───────────────────────────────────────────────────────────────
+def _sync_memory_across_nodes():
+    """
+    Raccoglie le ultime 30 entry di memoria da ogni nodo attivo e propaga
+    quelle "straniere" agli altri nodi. Usa _synced_memory_keys per evitare
+    re-push di entry già sincronizzate.
+    """
+    active_nodes = [n for n in _node_list() if n.get("status") == "active"]
+    if len(active_nodes) < 2:
+        return  # Niente da sincronizzare con un solo nodo
+
+    # Fase 1: raccolta
+    node_memories: dict = {}  # node_id -> [entries]
+    for node in active_nodes:
+        ep  = _best_endpoint(node)
+        nid = node.get("node_id", "")
+        try:
+            r = requests.get(f"{_ep_to_url(ep)}/memory", params={"limit": 30}, timeout=4)
+            if r.status_code == 200:
+                node_memories[nid] = r.json().get("entries", [])
+        except Exception:
+            pass
+
+    if not node_memories:
+        return
+
+    # Fase 2: propagazione
+    pushed_total = 0
+    for src_nid, entries in node_memories.items():
+        for entry in entries:
+            ts  = entry.get("ts") or entry.get("timestamp", "")
+            key = f"{src_nid}:{ts}"
+            if key in _synced_memory_keys:
+                continue
+            _synced_memory_keys.add(key)
+
+            # Invia l'entry a tutti i nodi che NON sono la sorgente
+            for dst_node in active_nodes:
+                dst_nid = dst_node.get("node_id", "")
+                if dst_nid == src_nid:
+                    continue
+                dst_ep = _best_endpoint(dst_node)
+                try:
+                    requests.post(
+                        f"{_ep_to_url(dst_ep)}/memory/push",
+                        json={"node_id": src_nid, "entry": entry},
+                        timeout=4,
+                    )
+                    pushed_total += 1
+                except Exception:
+                    pass
+
+    if pushed_total > 0:
+        push_log(
+            'memory_sync',
+            f'Memory sync: {pushed_total} entries propagate su {len(active_nodes)} nodi',
+            detail=f'nodi={[n.get("node_id","")[:12] for n in active_nodes]}',
+            status='success',
+        )
 
 # HEARTBEAT
 DREAM_PHRASES = [
@@ -472,11 +566,19 @@ def heartbeat_loop():
         cycle = hb_state["cycle"] + 1
         hb_state["cycle"]     = cycle
         hb_state["last_tick"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
         _poll_mesh_nodes()
+
         hb_state["nodes_seen"] = [
             n.get("node_id", n.get("endpoint", "?"))[:12]
             for n in _node_list() if n.get("status") == "active"
         ]
+
+        # ── Memory sync: ogni 2 cicli (ogni ~30s) ──
+        if cycle % 2 == 0:
+            _sync_memory_across_nodes()
+            hb_state["last_memory_sync"] = hb_state["last_tick"]
+
         for node in _node_list():
             if node.get("status") != "active":
                 continue
@@ -488,25 +590,24 @@ def heartbeat_loop():
                 requests.get(f"{_ep_to_url(ep)}/health", timeout=2)
                 lat = int((time.time() - t0) * 1000)
                 push_log('connection_test', f'HB#{cycle} ping OK -> {nid}',
-                         f'latency: {lat}ms | endpoint: {ep}',
+                         f'latency: {lat}ms | endpoint: {ep} | score: {round(_node_score(node),3)}',
                          source='control-plane', target=nid, status='success', trace_id=tid)
                 hb_state["last_conn"] = hb_state["last_tick"]
             except Exception as e:
                 push_log('connection_test', f'HB#{cycle} ping FAILED -> {nid}',
                          str(e), source='control-plane', target=nid, status='failed', trace_id=tid)
+
         if cycle % 3 == 0:
             pool = [n.get("node_id", "node-sim")[:16] for n in _node_list()] or ["node-sim"]
             nid  = random.choice(pool)
             push_log('dream', f'{nid}: {random.choice(DREAM_PHRASES).format(random.randint(1, 99))}',
                      f'cycle={cycle}', source=nid, status='info')
             hb_state["last_dream"] = hb_state["last_tick"]
+
         if cycle % 5 == 0:
-            # Garantiamo sempre esattamente 2 ID distinti per random.sample
             real_ids = [n.get("node_id", "")[:16] for n in _node_list() if n.get("node_id")]
-            # Pad con simulati finche' non abbiamo 2 elementi unici
             sim_pool = ["node-sim-A", "node-sim-B", "node-sim-C"]
             pool = list(dict.fromkeys(real_ids + sim_pool))[:]
-            # dict.fromkeys preserva ordine e deduplica; prendiamo i primi 2 distinti
             unique_pool = list(dict.fromkeys(pool))
             if len(unique_pool) < 2:
                 unique_pool = ["node-sim-A", "node-sim-B"]
@@ -519,6 +620,7 @@ def heartbeat_loop():
             push_log('node_chat', f'{dst} -> {src}: "{answer}"', 'reply',
                      source=dst, target=src, status='info', trace_id=tid)
             hb_state["last_chat"] = hb_state["last_tick"]
+
         time.sleep(15)
 
 # DASHBOARD
