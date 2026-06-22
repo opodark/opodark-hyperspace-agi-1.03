@@ -7,8 +7,8 @@
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.29.2/cytoscape.min.js"></script>
 <style>
-:root,[data-theme="dark"]{--bg:#0b0c0e;--surface:#131518;--surface2:#191c21;--surface3:#21252d;--border:#272b33;--divider:#1c1f26;--text:#c8cdd6;--text-muted:#636a78;--text-faint:#353a44;--primary:#4f98a3;--primary-h:#2d7d8a;--primary-bg:rgba(79,152,163,.12);--success:#6daa45;--success-bg:rgba(109,170,69,.12);--warning:#e8af34;--warning-bg:rgba(232,175,52,.10);--error:#dd6974;--error-bg:rgba(221,105,116,.12);--info:#5591c7;--info-bg:rgba(85,145,199,.12);--dream:#a86fdf;--dream-bg:rgba(168,111,223,.12);--chat:#fdab43;--chat-bg:rgba(253,171,67,.10);--root:#f06292;--hub:#4dd0e1;--leaf:#81c784;--reg:#c49a38;--reg-bg:rgba(196,154,56,.12);--font-mono:'JetBrains Mono',monospace;--font-body:'Inter',sans-serif;--radius:5px;--radius-lg:9px;--tr:160ms cubic-bezier(.16,1,.3,1)}
-[data-theme="light"]{--bg:#f0f1f4;--surface:#fff;--surface2:#f6f7fa;--surface3:#eaecf0;--border:#d8dbe2;--text:#191c22;--text-muted:#636a78;--text-faint:#b0b8c8;--primary:#016970;--primary-h:#014f55;--primary-bg:rgba(1,105,112,.08);--success:#3a6e1a;--success-bg:rgba(58,110,26,.08);--warning:#9a6800;--error:#a12c3a;--error-bg:rgba(161,44,58,.08);--info:#225f99;--info-bg:rgba(34,95,153,.08);--dream:#6b30b5;--dream-bg:rgba(107,48,181,.08);--chat:#b56200;--chat-bg:rgba(181,98,0,.08);--reg:#7a5c00;--reg-bg:rgba(122,92,0,.08)}
+:root,[data-theme="dark"]{--bg:#0b0c0e;--surface:#131518;--surface2:#191c21;--surface3:#21252d;--border:#272b33;--divider:#1c1f26;--text:#c8cdd6;--text-muted:#636a78;--text-faint:#353a44;--primary:#4f98a3;--primary-h:#2d7d8a;--primary-bg:rgba(79,152,163,.12);--success:#6daa45;--success-bg:rgba(109,170,69,.12);--warning:#e8af34;--warning-bg:rgba(232,175,52,.10);--error:#dd6974;--error-bg:rgba(221,105,116,.12);--info:#5591c7;--info-bg:rgba(85,145,199,.12);--dream:#a86fdf;--dream-bg:rgba(168,111,223,.12);--chat:#fdab43;--chat-bg:rgba(253,171,67,.10);--root:#f06292;--hub:#4dd0e1;--leaf:#81c784;--reg:#c49a38;--reg-bg:rgba(196,154,56,.12);--memsync:#64b5f6;--memsync-bg:rgba(100,181,246,.12);--font-mono:'JetBrains Mono',monospace;--font-body:'Inter',sans-serif;--radius:5px;--radius-lg:9px;--tr:160ms cubic-bezier(.16,1,.3,1)}
+[data-theme="light"]{--bg:#f0f1f4;--surface:#fff;--surface2:#f6f7fa;--surface3:#eaecf0;--border:#d8dbe2;--text:#191c22;--text-muted:#636a78;--text-faint:#b0b8c8;--primary:#016970;--primary-h:#014f55;--primary-bg:rgba(1,105,112,.08);--success:#3a6e1a;--success-bg:rgba(58,110,26,.08);--warning:#9a6800;--error:#a12c3a;--error-bg:rgba(161,44,58,.08);--info:#225f99;--info-bg:rgba(34,95,153,.08);--dream:#6b30b5;--dream-bg:rgba(107,48,181,.08);--chat:#b56200;--chat-bg:rgba(181,98,0,.08);--reg:#7a5c00;--reg-bg:rgba(122,92,0,.08);--memsync:#1565c0;--memsync-bg:rgba(21,101,192,.08)}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{font-size:13px;-webkit-font-smoothing:antialiased}
 body{font-family:var(--font-body);background:var(--bg);color:var(--text);min-height:100vh;display:grid;grid-template-rows:auto auto 1fr}
@@ -60,6 +60,11 @@ main{padding:18px 20px;display:grid}
 .hint{font-size:.65rem;color:var(--text-muted);margin-top:3px}
 .fg{display:flex;flex-direction:column;gap:4px}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+/* score badge */
+.score-badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:99px;font-size:.6rem;font-weight:700;font-family:var(--font-mono);flex-shrink:0;gap:3px}
+.score-high{background:rgba(109,170,69,.18);color:var(--success)}
+.score-mid{background:rgba(232,175,52,.15);color:var(--warning)}
+.score-low{background:rgba(221,105,116,.15);color:var(--error)}
 /* nodes */
 .nodes-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
 .node-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px;transition:border-color var(--tr)}
@@ -136,9 +141,9 @@ main{padding:18px 20px;display:grid}
 .lt.active{background:var(--surface3);border-color:var(--text-muted);color:var(--text)}
 .filter-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .log-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;font-family:var(--font-mono)}
-.log-thead{display:grid;grid-template-columns:112px 130px 110px 100px 80px 1fr;font-size:.62rem;font-weight:700;color:var(--text-muted);letter-spacing:.07em;text-transform:uppercase;padding:7px 14px;border-bottom:1px solid var(--divider);background:var(--surface2)}
+.log-thead{display:grid;grid-template-columns:112px 140px 110px 100px 80px 1fr;font-size:.62rem;font-weight:700;color:var(--text-muted);letter-spacing:.07em;text-transform:uppercase;padding:7px 14px;border-bottom:1px solid var(--divider);background:var(--surface2)}
 .log-body{max-height:460px;overflow-y:auto}
-.log-row{display:grid;grid-template-columns:112px 130px 110px 100px 80px 1fr;padding:7px 14px;border-bottom:1px solid var(--divider);cursor:pointer;transition:background var(--tr);font-size:.72rem;align-items:start}
+.log-row{display:grid;grid-template-columns:112px 140px 110px 100px 80px 1fr;padding:7px 14px;border-bottom:1px solid var(--divider);cursor:pointer;transition:background var(--tr);font-size:.72rem;align-items:start}
 .log-row:last-child{border-bottom:none}
 .log-row:hover{background:var(--surface3)}
 .log-row .ts{color:var(--text-muted);font-size:.64rem;padding-top:2px}
@@ -149,6 +154,7 @@ main{padding:18px 20px;display:grid}
 .tb-node_chat{background:var(--chat-bg);color:var(--chat)}
 .tb-mesh_event{background:var(--warning-bg);color:var(--warning)}
 .tb-system{background:var(--surface3);color:var(--text-muted)}
+.tb-memory_sync{background:var(--memsync-bg);color:var(--memsync)}
 .sbadge{display:inline-flex;padding:2px 7px;border-radius:99px;font-size:.59rem;font-weight:700;text-transform:uppercase;white-space:nowrap}
 .st-success{background:var(--success-bg);color:var(--success)}
 .st-failed{background:var(--error-bg);color:var(--error)}
@@ -215,6 +221,7 @@ main{padding:18px 20px;display:grid}
   <div class="hb-item"><span class="hb-label">Nodes</span><span class="hb-val" id="hbNodes">&#8212;</span></div>
   <div class="hb-item"><span class="hb-label">Last conn</span><span class="hb-val" id="hbConn">&#8212;</span></div>
   <div class="hb-item"><span class="hb-label">Last dream</span><span class="hb-val" id="hbDream">&#8212;</span></div>
+  <div class="hb-item"><span class="hb-label" style="color:var(--memsync)">&#129504; Mem sync</span><span class="hb-val" id="hbMemSync">&#8212;</span></div>
   <span class="hb-live" style="margin-left:auto">&#9679; LIVE</span>
 </div>
 
@@ -250,6 +257,9 @@ main{padding:18px 20px;display:grid}
           <div style="display:flex;align-items:center;gap:7px"><span style="width:12px;height:12px;border-radius:50%;background:var(--leaf);display:inline-block"></span>leaf</div>
           <div style="display:flex;align-items:center;gap:7px;margin-top:4px"><span style="width:20px;height:2px;background:var(--primary);display:inline-block"></span>active edge</div>
           <div style="display:flex;align-items:center;gap:7px"><span style="width:20px;height:2px;background:var(--border);display:inline-block"></span>stale edge</div>
+          <div style="display:flex;align-items:center;gap:5px;margin-top:4px"><span class="score-badge score-high">&#9650; 0.7</span>high score</div>
+          <div style="display:flex;align-items:center;gap:5px"><span class="score-badge score-mid">&#9644; 0.4</span>mid score</div>
+          <div style="display:flex;align-items:center;gap:5px"><span class="score-badge score-low">&#9660; 0.2</span>low score</div>
         </div>
       </div>
     </div>
@@ -271,8 +281,8 @@ main{padding:18px 20px;display:grid}
   </div>
   <div class="card" style="padding:0;overflow:hidden">
     <table class="reg-table">
-      <thead><tr><th>Node ID</th><th>Endpoint</th><th>Tier</th><th>Stato</th><th>Versione</th><th>Uptime</th><th>Last Seen</th></tr></thead>
-      <tbody id="regTableBody"><tr><td colspan="7" class="reg-empty">Caricamento&#8230;</td></tr></tbody>
+      <thead><tr><th>Node ID</th><th>Endpoint</th><th>Tier</th><th>Score</th><th>Stato</th><th>Versione</th><th>Uptime</th><th>Last Seen</th></tr></thead>
+      <tbody id="regTableBody"><tr><td colspan="8" class="reg-empty">Caricamento&#8230;</td></tr></tbody>
     </table>
   </div>
 </div>
@@ -310,6 +320,7 @@ main{padding:18px 20px;display:grid}
     <button class="lt" onclick="setTab('dream',this)">&#128173; Dreams</button>
     <button class="lt" onclick="setTab('node_chat',this)">&#128172; Chat</button>
     <button class="lt" onclick="setTab('mesh_event',this)">&#127760; Mesh</button>
+    <button class="lt" onclick="setTab('memory_sync',this)" style="color:var(--memsync)">&#129504; Memory Sync</button>
     <button class="lt" onclick="setTab('system',this)">&#9881;&#65039; System</button>
   </div>
   <div class="filter-row">
@@ -443,6 +454,7 @@ async function refreshHbBar(){
     document.getElementById('hbNodes').textContent=d.nodes_seen&&d.nodes_seen.length?d.nodes_seen.join(', '):'none';
     document.getElementById('hbConn').textContent=d.last_conn?d.last_conn.slice(11,19):'--';
     document.getElementById('hbDream').textContent=d.last_dream?d.last_dream.slice(11,19):'--';
+    document.getElementById('hbMemSync').textContent=d.last_memory_sync?d.last_memory_sync.slice(11,19):'--';
   }catch(e){}
 }
 setInterval(refreshHbBar,5000); refreshHbBar();
@@ -452,6 +464,14 @@ function tierClass(t){return t==='root'?'tier-root':t==='hub'?'tier-hub':'tier-l
 function statusDotClass(s){return s==='active'?'active':s==='unreachable'?'unreachable':'unknown';}
 function formatUptime(s){if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';return Math.floor(s/3600)+'h '+Math.floor((s%3600)/60)+'m';}
 function escH(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+// Score badge helper
+function scoreBadge(score){
+  var s=parseFloat(score)||0;
+  var cls=s>=0.65?'score-high':s>=0.35?'score-mid':'score-low';
+  var icon=s>=0.65?'&#9650;':s>=0.35?'&#9644;':'&#9660;';
+  return '<span class="score-badge '+cls+'">'+icon+' '+s.toFixed(2)+'</span>';
+}
 
 // Nodes
 async function refreshNodes(){
@@ -467,10 +487,19 @@ async function refreshNodes(){
       var caps=(n.capabilities||[]).join(', ')||'?';
       var ver=n.version||'?';
       var ep=n.endpoint||'';
+      // Calcola score locale (stesso algoritmo del backend)
+      var tierS={'root':3,'hub':2,'leaf':1};
+      var ts=(tierS[tier]||1)/3;
+      var vs=Math.min(parseFloat(n.vram_gb||0),24)/24;
+      var ps=Math.min(parseInt(n.peers_active||0),10)/10;
+      var us=Math.min(parseInt(n.uptime_s||0),604800)/604800;
+      var score=ts*0.40+vs*0.30+ps*0.20+us*0.10;
       return '<div class="node-card">'
         +'<div class="nc-header"><span class="node-status-dot '+statusDotClass(n.status)+'"></span>'
         +'<span class="node-id" title="'+escH(n.node_id||'')+'">&#128187; '+escH(nid)+'</span>'
-        +'<span class="tier-badge '+tierClass(tier)+'">'+tier+'</span></div>'
+        +'<span class="tier-badge '+tierClass(tier)+'">'+tier+'</span>'
+        +scoreBadge(score)
+        +'</div>'
         +'<div class="node-meta">'
         +'<span class="nm-label">Endpoint</span><span class="nm-val" title="'+escH(ep)+'">'+escH(ep.replace('https://','').slice(0,30))+'</span>'
         +'<span class="nm-label">Version</span><span class="nm-val">'+escH(ver)+'</span>'
@@ -502,10 +531,15 @@ async function loadTopology(){
     var cyNodes=nodes.map(function(n){
       var tier=n.tier||'leaf';
       var label=(n.id||'?').slice(0,10);
+      var sc=parseFloat(n.score||0);
       return {data:{id:n.id,label:label,tier:tier,endpoint:n.endpoint||'',status:n.status||'active',
-        peers_active:n.peers_active||0,uptime_s:n.uptime_s||0,version:n.version||''},
-        style:{'background-color':TIER_COLOR[tier]||'#81c784',
-          'opacity':n.status==='unreachable'?0.35:1}};
+        peers_active:n.peers_active||0,uptime_s:n.uptime_s||0,version:n.version||'',score:sc},
+        style:{
+          'background-color':TIER_COLOR[tier]||'#81c784',
+          'opacity':n.status==='unreachable'?0.35:1,
+          'border-width': sc>=0.65?3:sc>=0.35?2:1,
+          'border-color': sc>=0.65?'#6daa45':sc>=0.35?'#e8af34':'#dd6974'
+        }};
     });
     var cyEdges=edges.map(function(e,i){
       return {data:{id:'e'+i,source:e.source,target:e.target,active:e.active!==false}};
@@ -521,17 +555,11 @@ async function loadTopology(){
           'color':'#fff','font-size':'10px','font-family':"'JetBrains Mono',monospace",
           'text-valign':'center','text-halign':'center',
           'width':44,'height':44,
-          'border-width':2,'border-color':'rgba(255,255,255,.15)',
           'text-outline-color':'rgba(0,0,0,.5)','text-outline-width':2
         }},
         {selector:'node:selected',style:{'border-width':3,'border-color':'#fff'}},
-        {selector:'edge',style:{
-          'width':1.5,
-          'line-color':'function(e){return e.data("active")?"#4f98a3":"#272b33";}',
-          'curve-style':'bezier','opacity':0.7
-        }},
-        {selector:'edge[?active]',style:{'line-color':'#4f98a3','opacity':0.8}},
-        {selector:'edge[!active]',style:{'line-color':'#272b33','opacity':0.4}}
+        {selector:'edge[?active]',style:{'line-color':'#4f98a3','opacity':0.8,'width':1.5,'curve-style':'bezier'}},
+        {selector:'edge[!active]',style:{'line-color':'#272b33','opacity':0.4,'width':1.5,'curve-style':'bezier'}}
       ],
       layout:{name:'cose',animate:true,animationDuration:600,
         nodeRepulsion:8000,gravity:0.3,edgeElasticity:100,
@@ -545,6 +573,7 @@ async function loadTopology(){
         +'<div class="topo-kv">'
         +'<span class="topo-k">id</span><span class="topo-v">'+escH(nd.id)+'</span>'
         +'<span class="topo-k">tier</span><span class="topo-v"><span class="tier-badge '+tierClass(nd.tier)+'">'+escH(nd.tier)+'</span></span>'
+        +'<span class="topo-k">score</span><span class="topo-v">'+scoreBadge(nd.score)+'</span>'
         +'<span class="topo-k">endpoint</span><span class="topo-v">'+escH(nd.endpoint)+'</span>'
         +'<span class="topo-k">status</span><span class="topo-v">'+escH(nd.status)+'</span>'
         +'<span class="topo-k">peers</span><span class="topo-v">'+escH(nd.peers_active)+'</span>'
@@ -591,24 +620,32 @@ async function refreshRegistry(){
     document.getElementById('regTiers').textContent=tiers.size;
     document.getElementById('regLastUpdate').textContent='Aggiornato '+new Date().toISOString().slice(11,19)+' UTC';
     var tbody=document.getElementById('regTableBody');
-    if(!nodes.length){tbody.innerHTML='<tr><td colspan="7" class="reg-empty">Nessun nodo registrato.</td></tr>';return;}
+    if(!nodes.length){tbody.innerHTML='<tr><td colspan="8" class="reg-empty">Nessun nodo registrato.</td></tr>';return;}
     tbody.innerHTML=nodes.map(function(n){
       var tier=n.tier||'leaf';
       var st=n.status||'unknown';
       var stColor=st==='active'?'var(--success)':st==='unreachable'?'var(--error)':'var(--text-faint)';
       var up=n.uptime_s?formatUptime(n.uptime_s):'';
       var ls=n.last_seen?(n.last_seen.replace('T',' ').slice(0,19)):'';
+      // Score calcolato lato client
+      var tierS={'root':3,'hub':2,'leaf':1};
+      var ts=(tierS[tier]||1)/3;
+      var vs=Math.min(parseFloat(n.vram_gb||0),24)/24;
+      var ps=Math.min(parseInt(n.peers_active||0),10)/10;
+      var us=Math.min(parseInt(n.uptime_s||0),604800)/604800;
+      var score=ts*0.40+vs*0.30+ps*0.20+us*0.10;
       return '<tr>'
         +'<td><span class="reg-id" title="'+escH(n.node_id||'')+'">'+(n.node_id||'?').slice(0,20)+'&hellip;</span></td>'
         +'<td><span class="reg-ep">'+escH(n.endpoint||'')+'</span></td>'
         +'<td><span class="tier-badge '+tierClass(tier)+'">'+tier+'</span></td>'
+        +'<td>'+scoreBadge(score)+'</td>'
         +'<td><span style="color:'+stColor+';font-family:var(--font-mono);font-size:.68rem">'+st+'</span></td>'
         +'<td><span style="font-family:var(--font-mono);font-size:.68rem;color:var(--text-muted)">'+escH(n.version||'')+'</span></td>'
         +'<td><span style="font-family:var(--font-mono);font-size:.68rem">'+up+'</span></td>'
         +'<td class="reg-ts">'+ls+'</td>'
         +'</tr>';
     }).join('');
-  }catch(e){document.getElementById('regTableBody').innerHTML='<tr><td colspan="7" class="reg-empty">Errore: '+escH(e.message)+'</td></tr>';}
+  }catch(e){document.getElementById('regTableBody').innerHTML='<tr><td colspan="8" class="reg-empty">Errore: '+escH(e.message)+'</td></tr>';}
 }
 setInterval(function(){var p=document.getElementById('panel-registry');if(p&&p.classList.contains('active'))refreshRegistry();},10000);
 
@@ -632,12 +669,15 @@ function renderTaskCard(t){
       :'<div class="task-response-box">'+escH(resp)+'</div>')
     :'<div style="color:var(--text-faint);font-size:.75rem">Nessuna risposta.</div>';
   var ts=(t.completed_at||t.created_at||'').slice(0,19).replace('T',' ');
+  // Score del nodo assegnato, se disponibile
+  var scoreHTML=t.routing_score!==undefined?'<span style="margin-left:4px">'+scoreBadge(t.routing_score)+'</span>':'';
   return '<div class="task-card">'
     +'<div class="task-header" data-tbid="tb-'+escH(id)+'">'
     +statusBadge(status)
     +'<span class="task-id">#'+escH(id)+'</span>'
     +'<span class="task-model-badge">'+escH(model)+'</span>'
     +'<span class="task-node" title="'+escH(t.node||'')+'">'+(node?'&#128187; '+node+'...':'')+'</span>'
+    +scoreHTML
     +'<span class="task-ts">'+escH(ts)+'</span>'
     +'</div>'
     +'<div class="task-body" id="tb-'+escH(id)+'">'
@@ -707,7 +747,7 @@ async function refreshLogs(){
   if(q)url+='q='+encodeURIComponent(q)+'&';
   try{
     var res=await(await fetch(url)).json();
-    var logs=res.logs||res; // compatibile con risposta array legacy
+    var logs=res.logs||res;
     var total=res.total;
     renderLogs(logs,total);
   }catch(e){}
