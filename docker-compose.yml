@@ -24,6 +24,7 @@
 # Dashboard:  http://localhost:8085/dashboard
 # Registry:   http://localhost:8086/nodes
 # Node 1:     http://localhost:8081
+# Landing:    https://sanctuary-mower-plated.ngrok-free.dev
 # ============================================================
 
 services:
@@ -38,7 +39,8 @@ services:
       - "${REGISTRY_PORT:-8086}:8086"
     environment:
       REGISTRY_PORT: "${REGISTRY_PORT:-8086}"
-      NODE_TTL: "${NODE_TTL:-60}"
+      NODE_TTL: "${NODE_TTL:-300}"
+      REGISTRY_PUBLIC_URL: "${REGISTRY_PUBLIC_URL:-https://sanctuary-mower-plated.ngrok-free.dev}"
       PYTHONUNBUFFERED: "1"
     networks:
       - hyperspace
@@ -149,8 +151,6 @@ services:
       - hyperspace
 
   # ── Open WebUI ───────────────────────────────────────
-  # Nessun depends_on su ollama: funziona con qualsiasi backend
-  # (LM Studio, Ollama nativo, Ollama in container)
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: hyperspace_open_webui
@@ -184,9 +184,12 @@ services:
       PYTHONUNBUFFERED: "1"
       NODE_ENDPOINTS: "${NODE_ENDPOINTS:-node-1:8084}"
       REGISTRY_URL: "http://registry:8086"
+      REGISTRY_PUBLIC_URL: "${REGISTRY_PUBLIC_URL:-https://sanctuary-mower-plated.ngrok-free.dev}"
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:1234}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3}
       INFERENCE_BACKEND: ${INFERENCE_BACKEND:-lmstudio}
+      MEMORY_TTL_DAYS: "${MEMORY_TTL_DAYS:-7}"
+      MEMORY_MAX_ENTRIES: "${MEMORY_MAX_ENTRIES:-200}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -214,9 +217,11 @@ services:
       PUBLIC_ENDPOINT: ${PUBLIC_ENDPOINT:-}
       BOOT_PEERS: ${BOOT_PEERS:-}
       REGISTRY_URL: "http://registry:8086"
-      HEARTBEAT_EVERY: "${HEARTBEAT_EVERY:-30}"
-      HEARTBEAT_INTERVAL: "${HEARTBEAT_INTERVAL:-30}"
-      NODE_TTL: "${NODE_TTL:-90}"
+      REGISTRY_PUBLIC_URL: "${REGISTRY_PUBLIC_URL:-https://sanctuary-mower-plated.ngrok-free.dev}"
+      CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:-}
+      HEARTBEAT_EVERY: "${HEARTBEAT_EVERY:-15}"
+      PEER_MAX_AGE_S: "${PEER_MAX_AGE_S:-120}"
+      NODE_TTL: "${NODE_TTL:-300}"
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:1234}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3}
       INFERENCE_BACKEND: ${INFERENCE_BACKEND:-lmstudio}
@@ -249,9 +254,11 @@ services:
 #      PUBLIC_ENDPOINT: ${PUBLIC_ENDPOINT:-}
 #      BOOT_PEERS: ${BOOT_PEERS:-}
 #      REGISTRY_URL: "http://registry:8086"
-#      HEARTBEAT_EVERY: "${HEARTBEAT_EVERY:-30}"
-#      HEARTBEAT_INTERVAL: "${HEARTBEAT_INTERVAL:-30}"
-#      NODE_TTL: "${NODE_TTL:-90}"
+#      REGISTRY_PUBLIC_URL: "${REGISTRY_PUBLIC_URL:-https://sanctuary-mower-plated.ngrok-free.dev}"
+#      CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:-}
+#      HEARTBEAT_EVERY: "${HEARTBEAT_EVERY:-15}"
+#      PEER_MAX_AGE_S: "${PEER_MAX_AGE_S:-120}"
+#      NODE_TTL: "${NODE_TTL:-300}"
 #      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:1234}
 #      OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3}
 #      INFERENCE_BACKEND: ${INFERENCE_BACKEND:-lmstudio}

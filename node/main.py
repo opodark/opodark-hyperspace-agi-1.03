@@ -2,6 +2,7 @@
 # HyperSpace AGI v1.02 — Unified Node
 # v1.02: middleware firma inter-nodo, /ollama/pull SSE, ollama-proxy, /memory
 # fix: heartbeat try/except+retry, endpoint normalizzato, peer TTL configurabile
+# feat: auto-discovery peer dal registry al boot se BOOT_PEERS vuoto
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
@@ -30,20 +31,21 @@ NODE_PUBKEY  = _identity["public_key"]
 _private_key = _identity["_private_key"]
 
 # ── CONFIG ───────────────────────────────────────────────
-NODE_HOSTNAME       = os.getenv("NODE_HOSTNAME", "localhost")
-NODE_PORT           = int(os.getenv("NODE_PORT", 8084))
-OLLAMA_URL          = os.getenv("OLLAMA_URL", "http://ollama:11434")
-DEFAULT_MODEL       = os.getenv("OLLAMA_MODEL", "phi3")
-HEARTBEAT_EVERY     = int(os.getenv("HEARTBEAT_EVERY", 15))
-PUBLIC_ENDPOINT     = os.getenv("PUBLIC_ENDPOINT", "").strip().rstrip("/")
-BOOT_PEERS          = [p.strip().rstrip("/") for p in os.getenv("BOOT_PEERS", "").split(",") if p.strip()]
-CONTROL_PLANE_URL   = os.getenv("CONTROL_PLANE_URL", "").strip().rstrip("/")
-REGISTRY_URL        = os.getenv("REGISTRY_URL", "http://registry:8086").strip().rstrip("/")
-SIGN_REQUESTS       = os.getenv("SIGN_REQUESTS", "true").lower() == "true"
-_FORCED_TIER        = os.getenv("NODE_TIER", "").strip().lower()
+NODE_HOSTNAME        = os.getenv("NODE_HOSTNAME", "localhost")
+NODE_PORT            = int(os.getenv("NODE_PORT", 8084))
+OLLAMA_URL           = os.getenv("OLLAMA_URL", "http://ollama:11434")
+DEFAULT_MODEL        = os.getenv("OLLAMA_MODEL", "phi3")
+HEARTBEAT_EVERY      = int(os.getenv("HEARTBEAT_EVERY", 15))
+PUBLIC_ENDPOINT      = os.getenv("PUBLIC_ENDPOINT", "").strip().rstrip("/")
+BOOT_PEERS           = [p.strip().rstrip("/") for p in os.getenv("BOOT_PEERS", "").split(",") if p.strip()]
+CONTROL_PLANE_URL    = os.getenv("CONTROL_PLANE_URL", "").strip().rstrip("/")
+REGISTRY_URL         = os.getenv("REGISTRY_URL", "http://registry:8086").strip().rstrip("/")
+REGISTRY_PUBLIC_URL  = os.getenv("REGISTRY_PUBLIC_URL", "https://sanctuary-mower-plated.ngrok-free.dev").strip().rstrip("/")
+SIGN_REQUESTS        = os.getenv("SIGN_REQUESTS", "true").lower() == "true"
+_FORCED_TIER         = os.getenv("NODE_TIER", "").strip().lower()
 
 # Bug 4 fix: peer TTL configurabile via env (default 120s = 8 cicli heartbeat)
-PEER_MAX_AGE_S      = int(os.getenv("PEER_MAX_AGE_S", "120"))
+PEER_MAX_AGE_S       = int(os.getenv("PEER_MAX_AGE_S", "120"))
 
 DATA_DIR = os.getenv("DATA_DIR", "/app/data")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -200,7 +202,7 @@ async def register_to_control_plane():
         "node_id":      NODE_ID,
         "public_key":   NODE_PUBKEY,
         "tier":         NODE_PROFILE["tier"],
-        "endpoint":     NODE_ADVERTISED_ENDPOINT,   # Bug 2: già normalizzato
+        "endpoint":     NODE_ADVERTISED_ENDPOINT,
         "capabilities": NODE_PROFILE["capabilities"],
         "vram_gb":      VRAM_GB,
         "version":      NODE_PROFILE["version"],
@@ -218,6 +220,47 @@ async def register_to_control_plane():
                 print(f"[NODE:{NODE_ID[:10]}] control-plane announce HTTP {r.status_code}")
     except Exception as e:
         print(f"[NODE:{NODE_ID[:10]}] control-plane announce failed: {e}")
+
+
+# ── AUTO-DISCOVERY DAL REGISTRY ──────────────────────────
+async def _discover_peers_from_registry():
+    """
+    Se BOOT_PEERS è vuoto, scarica i nodi attivi dal registry pubblico
+    e si annuncia a ciascuno. Questo permette a un nuovo utente di
+    entrare nella mesh senza configurare BOOT_PEERS manualmente.
+    """
+    # Prova prima il registry locale, poi quello pubblico
+    urls_to_try = []
+    if REGISTRY_URL:
+        urls_to_try.append(REGISTRY_URL)
+    if REGISTRY_PUBLIC_URL and REGISTRY_PUBLIC_URL != REGISTRY_URL:
+        urls_to_try.append(REGISTRY_PUBLIC_URL)
+
+    discovered = []
+    for base_url in urls_to_try:
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                r = await client.get(f"{base_url}/nodes/active")
+                if r.status_code == 200:
+                    data = r.json()
+                    for n in data.get("nodes", []):
+                        ep = _normalize_endpoint(n.get("public_address", ""))
+                        nid = n.get("node_id", "")
+                        if ep and nid and nid != NODE_ID:
+                            discovered.append(ep)
+                    if discovered:
+                        print(f"[NODE:{NODE_ID[:10]}] auto-discovery: found {len(discovered)} peers from {base_url}")
+                        break
+        except Exception as e:
+            print(f"[NODE:{NODE_ID[:10]}] auto-discovery failed from {base_url}: {e}")
+
+    for ep in discovered:
+        try:
+            await announce_to_peer(ep)
+            print(f"[NODE:{NODE_ID[:10]}] auto-discovery: announced to {ep}")
+        except Exception as e:
+            print(f"[NODE:{NODE_ID[:10]}] auto-discovery announce failed -> {ep}: {e}")
+
 
 # ── PEER DISCOVERY ────────────────────────────────────────
 async def announce_to_peer(endpoint: str):
@@ -251,10 +294,6 @@ async def announce_to_peer(endpoint: str):
         print(f"[NODE:{NODE_ID[:10]}] announce failed -> {endpoint}: {e}")
 
 # ── HEARTBEAT — Bug 1 fix ─────────────────────────────────
-# Ogni asyncio.run() è ora protetto da try/except con log esplicito.
-# Il boot ha un retry automatico (max 3 tentativi, backoff 5s) per
-# gestire la race condition tra il nodo e il control-plane/registry.
-
 def _run_async_safe(coro_fn, label: str, *args, **kwargs):
     """Esegue una coroutine in un nuovo event loop con logging degli errori."""
     try:
@@ -274,6 +313,9 @@ def heartbeat_loop():
                 print(f"[NODE:{NODE_ID[:10]}] boot announce failed -> {peer_endpoint}: {e}")
         await register_to_registry()
         await register_to_control_plane()
+        # Auto-discovery: se non ho BOOT_PEERS configurati, li trovo dal registry
+        if not BOOT_PEERS:
+            await _discover_peers_from_registry()
 
     boot_ok = False
     for attempt in range(1, 4):
@@ -310,6 +352,12 @@ def heartbeat_loop():
                 await register_to_control_plane()
             except Exception as e:
                 print(f"[NODE:{NODE_ID[:10]}] hb control-plane failed: {e}")
+            # Se non ho ancora peer attivi, ritenta auto-discovery
+            if not active:
+                try:
+                    await _discover_peers_from_registry()
+                except Exception as e:
+                    print(f"[NODE:{NODE_ID[:10]}] hb auto-discovery failed: {e}")
 
         _run_async_safe(_hb, "heartbeat")
 
@@ -322,8 +370,10 @@ async def startup_event():
     print(f"[NODE:{NODE_ID[:10]}] tier={NODE_PROFILE['tier']} (forced={_FORCED_TIER or 'no'})")
     print(f"[NODE:{NODE_ID[:10]}] advertised={NODE_ADVERTISED_ENDPOINT}")
     print(f"[NODE:{NODE_ID[:10]}] vram_gb={VRAM_GB} (env={_vram_env} detected={_vram_detected})")
-    print(f"[NODE:{NODE_ID[:10]}] boot_peers={BOOT_PEERS}")
+    print(f"[NODE:{NODE_ID[:10]}] boot_peers={BOOT_PEERS or 'none — will use registry auto-discovery'}")
     print(f"[NODE:{NODE_ID[:10]}] peer_max_age_s={PEER_MAX_AGE_S}")
+    print(f"[NODE:{NODE_ID[:10]}] registry={REGISTRY_URL}")
+    print(f"[NODE:{NODE_ID[:10]}] registry_public={REGISTRY_PUBLIC_URL}")
     print(f"[NODE:{NODE_ID[:10]}] ollama -> {OLLAMA_URL}")
 
 # ── MIDDLEWARE firma ───────────────────────────────────────
