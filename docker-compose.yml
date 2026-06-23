@@ -21,16 +21,17 @@
 #   Ollama Vulkan:
 #     docker compose --profile vulkan up -d
 #
-# Dashboard:  http://<IP-HOST>:8099          ← accessibile da tutta la LAN
+# Dashboard:  http://<IP-HOST>:8099          <- accessibile da tutta la LAN
 # Dashboard:  http://localhost:8099           (locale)
 # Control Plane: http://localhost:8085
 # Registry:   http://localhost:8086/nodes
 # Node 1:     http://localhost:8081
+# Memory Graph: http://localhost:8090        <- Obsidian vault exporter
 # ============================================================
 
 services:
 
-  # ── Registry — discovery dinamico dei nodi ──────────────
+  # -- Registry -- discovery dinamico dei nodi ------------------------------------------
   registry:
     build:
       context: ./registry
@@ -53,9 +54,7 @@ services:
       retries: 5
       start_period: 20s
 
-  # ── Infra-UI Bridge — dashboard + SSE proxy ───────────────
-  # Serve dashboard.html e proxizza CP/Registry via HTTP puro.
-  # Accessibile da qualsiasi browser in LAN su http://<IP>:8099
+  # -- Infra-UI Bridge -- dashboard + SSE proxy -----------------------------------------
   bridge:
     build:
       context: ./infra-ui
@@ -83,7 +82,31 @@ services:
       retries: 3
       start_period: 15s
 
-  # ── Ollama CPU (profile: cpu) ─────────────────────────
+  # -- Memory Graph -- Obsidian vault exporter ------------------------------------------
+  # Legge memory.json.gz dal CP ogni EXPORT_INTERVAL secondi
+  # e scrive file .md in ./data/obsidian-vault (apribile da Obsidian locale)
+  # API: GET http://localhost:8090/status  GET /export  POST /export/force
+  memory-graph:
+    build:
+      context: ./memory-graph
+      dockerfile: Dockerfile
+    container_name: hyperspace_memory_graph
+    depends_on:
+      - control-plane
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./data/obsidian-vault:/vault
+    environment:
+      CP_URL:          "http://control-plane:8085"
+      VAULT_PATH:      "/vault"
+      EXPORT_INTERVAL: "${MEMORY_EXPORT_INTERVAL:-30}"
+      PYTHONUNBUFFERED: "1"
+    networks:
+      - hyperspace
+    restart: unless-stopped
+
+  # -- Ollama CPU (profile: cpu) ---------------------------------------------------------
   ollama:
     image: ollama/ollama:latest
     container_name: hyperspace_ollama
@@ -98,7 +121,7 @@ services:
     networks:
       - hyperspace
 
-  # ── Ollama NVIDIA GPU (profile: nvidia) ────────────────
+  # -- Ollama NVIDIA GPU (profile: nvidia) -----------------------------------------------
   ollama-nvidia:
     image: ollama/ollama:latest
     container_name: hyperspace_ollama_nvidia
@@ -122,7 +145,7 @@ services:
     networks:
       - hyperspace
 
-  # ── Ollama AMD ROCm (profile: amd) ───────────────────
+  # -- Ollama AMD ROCm (profile: amd) ----------------------------------------------------
   ollama-amd:
     image: ollama/ollama:rocm
     container_name: hyperspace_ollama_amd
@@ -142,7 +165,7 @@ services:
     networks:
       - hyperspace
 
-  # ── Ollama Intel GPU (profile: intel) ─────────────────
+  # -- Ollama Intel GPU (profile: intel) -------------------------------------------------
   ollama-intel:
     image: ollama/ollama:latest
     container_name: hyperspace_ollama_intel
@@ -162,7 +185,7 @@ services:
     networks:
       - hyperspace
 
-  # ── Ollama Vulkan GPU (profile: vulkan) ────────────────
+  # -- Ollama Vulkan GPU (profile: vulkan) -----------------------------------------------
   ollama-vulkan:
     image: ollama/ollama:latest
     container_name: hyperspace_ollama_vulkan
@@ -181,7 +204,7 @@ services:
     networks:
       - hyperspace
 
-  # ── Open WebUI ───────────────────────────────────
+  # -- Open WebUI -----------------------------------------------------------------------
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: hyperspace_open_webui
@@ -198,7 +221,7 @@ services:
       - hyperspace
     restart: unless-stopped
 
-  # ── Control Plane + Dashboard API ───────────────────
+  # -- Control Plane + Dashboard API ----------------------------------------------------
   control-plane:
     build:
       context: .
@@ -227,7 +250,7 @@ services:
       - hyperspace
     restart: unless-stopped
 
-  # ── Nodo 1 ──────────────────────────────────────────
+  # -- Nodo 1 ---------------------------------------------------------------------------
   node-1:
     build:
       context: .
