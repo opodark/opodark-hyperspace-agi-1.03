@@ -5,6 +5,7 @@
 # feat: memory compression — gzip + TTL/max-entries pruning
 # feat: OMEGA Obsidian bridge — /health + /mcp JSON-RPC 2.0
 # fix: DB reload al boot, status recovery, endpoint dedup
+# fix: /tasks ora legge da DB (storico persiste tra restart)
 
 from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
 import os, threading, time, requests, json, uuid, random, gzip
@@ -34,7 +35,7 @@ MEMORY_TTL_DAYS    = int(os.getenv("MEMORY_TTL_DAYS", "7"))
 MEMORY_MAX_ENTRIES = int(os.getenv("MEMORY_MAX_ENTRIES", "200"))
 
 # STATE
-tasks: dict = {}
+tasks: dict = {}           # RAM cache dei task in-volo (task_id → dict rich)
 _nodes_by_id: dict  = {}
 _known_endpoints: set = set()
 _synced_memory_keys: set = set()
@@ -98,6 +99,48 @@ def _load_nodes_from_db():
     for ep in NODE_ENDPOINTS:
         _known_endpoints.add(_normalize_endpoint(ep))
     print(f"[CP] Loaded {len(_nodes_by_id)} nodes from DB, {len(_known_endpoints)} known endpoints")
+
+
+def _db_row_to_task(row: dict) -> dict:
+    """Converte una riga DB tasks nel formato dict ricco usato dalla RAM cache."""
+    prompt = row.get("prompt", "")
+    model  = row.get("model", "")
+    return {
+        "id":           row.get("task_id", row.get("id", "")),
+        "status":       row.get("status", "created"),
+        "node":         row.get("node_id") or None,
+        "endpoint":     row.get("endpoint", ""),
+        "created_at":   row.get("created_at", ""),
+        "completed_at": row.get("completed_at") or None,
+        "error":        row.get("error") or None,
+        "result":       _try_parse_json(row.get("result", "")),
+        "payload":      {"prompt": prompt, "model": model},
+        "_from_db":     True,
+    }
+
+
+def _try_parse_json(s):
+    if not s:
+        return None
+    try:
+        return json.loads(s)
+    except Exception:
+        return s
+
+
+def _load_tasks_from_db():
+    """Popola la RAM cache con lo storico DB al boot. RAM wins su conflitti."""
+    rows = db.get_all_tasks()
+    loaded = 0
+    for row in rows:
+        tid = row.get("task_id", "")
+        if not tid:
+            continue
+        if tid not in tasks:          # non sovrascrivere task già in volo in RAM
+            tasks[tid] = _db_row_to_task(row)
+            loaded += 1
+    print(f"[CP] Loaded {loaded} tasks from DB")
+
 
 # ── BRIDGE NOTIFY ─────────────────────────────────────────────────────────────
 def _notify_bridge(event_type: str, payload: dict):
@@ -360,12 +403,8 @@ def _fetch_models():
     return {"ok": False, "url": url, "backend": backend, "models": [], "errors": errors}
 
 # ── OPENAI-COMPATIBLE CHAT ENDPOINT ──────────────────────────────────────────
-# Tutte le WebUI (Open WebUI, Chatbot UI, ecc.) parlano questo protocollo.
-# Punto la WebUI a http://localhost:8085 come "OpenAI base URL".
-
 @app.route('/v1/models')
 def v1_models():
-    """OpenAI /v1/models — lista modelli disponibili su Ollama."""
     result = _fetch_models()
     models_out = [
         {"id": m, "object": "model", "created": 0, "owned_by": "hyperspace-agi"}
@@ -378,21 +417,12 @@ def v1_models():
 
 @app.route('/v1/chat/completions', methods=['POST'])
 def v1_chat_completions():
-    """
-    OpenAI-compatible chat endpoint.
-    - Crea un task nel sistema HyperSpace (loggato, memorizzato)
-    - Smista sull'Ollama migliore disponibile (via nodo o diretto)
-    - Salva prompt+risposta in memoria
-    - Notifica il bridge SSE
-    - Supporta stream=True e stream=False
-    """
     data     = request.get_json(force=True, silent=True) or {}
     messages = data.get("messages", [])
     model    = data.get("model", advanced_config["ollama"]["defaultModel"])
     stream   = data.get("stream", False)
     task_id  = str(uuid.uuid4())[:8]
 
-    # Estrai testo del prompt dall'ultimo messaggio utente
     prompt = ""
     for m in reversed(messages):
         if m.get("role") == "user":
@@ -402,7 +432,6 @@ def v1_chat_completions():
     if not prompt:
         prompt = json.dumps(messages)[:200]
 
-    # 1. Registra task
     task = {
         "id":         task_id,
         "status":     "created",
@@ -415,7 +444,6 @@ def v1_chat_completions():
     push_log('system', f'WebUI task created: {task_id}',
              detail=f'model={model} prompt={prompt[:80]}')
 
-    # 2. Scegli nodo migliore (o fallback diretto a Ollama)
     active = [n for n in _node_list() if n.get("status") == "active"]
     selected = _select_best_node(active)
     ollama_base = advanced_config["ollama"]["url"].rstrip("/")
@@ -433,7 +461,6 @@ def v1_chat_completions():
             "from": "cp", "to": node_id[:12],
             "type": "task", "label": f"WebUI: {prompt[:40]}"
         })
-        # Prova l'endpoint /v1/chat/completions del nodo
         try:
             if stream:
                 def _stream_from_node():
@@ -462,9 +489,7 @@ def v1_chat_completions():
         except Exception as e:
             push_log('inter_node_message', f'WebUI task {task_id} node failed, fallback to ollama',
                      str(e), source=node_id[:12], status='warn')
-            # fallback
 
-    # 3. Fallback diretto a Ollama
     task["node"] = "ollama-direct"
     db.update_task(task_id, "assigned", node_id="ollama-direct", endpoint=ollama_base)
     push_log('inter_node_message', f'WebUI task {task_id} -> ollama-direct',
@@ -509,7 +534,6 @@ def v1_chat_completions():
 
 
 def _finalize_task(task, task_id, node_id, model, prompt, result_json):
-    """Aggiorna task, salva memoria, notifica bridge."""
     reply_text = ""
     try:
         reply_text = result_json["choices"][0]["message"]["content"]
@@ -521,7 +545,6 @@ def _finalize_task(task, task_id, node_id, model, prompt, result_json):
     task["completed_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
     db.update_task(task_id, "done", result=json.dumps(result_json))
 
-    # Salva in memoria: sia il prompt che la risposta
     ts_now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
     _memory_append({
         "ts":      ts_now,
@@ -664,7 +687,6 @@ def get_mesh_nodes():
 
 @app.route('/nodes/active')
 def get_nodes_active():
-    """Alias per compatibilità con client che usano /nodes/active."""
     return jsonify([n for n in _node_list() if n.get("status") == "active"])
 
 @app.route('/mesh/node/<path:endpoint>/status')
@@ -879,9 +901,18 @@ def assign_task():
         return jsonify({"error": str(e)}), 500
     return jsonify({"message": "done", "task": task})
 
+
 @app.route('/tasks')
 def get_tasks():
-    return jsonify(tasks)
+    """
+    Ritorna tutti i task: merge tra RAM (in-volo, più freschi) e DB (storico).
+    La RAM win in caso di conflitto sullo stesso task_id.
+    """
+    db_rows = db.get_all_tasks()
+    merged = {row["task_id"]: _db_row_to_task(row) for row in db_rows if row.get("task_id")}
+    merged.update(tasks)   # RAM sovrascrive: ha result/payload più ricchi
+    return jsonify(merged)
+
 
 # ── MEMORY ENDPOINTS ──────────────────────────────────────────────────────────
 @app.route('/memory')
@@ -1100,10 +1131,12 @@ def dashboard_alias():
 # STARTUP
 if __name__ == '__main__':
     _load_nodes_from_db()
+    _load_tasks_from_db()
     t = threading.Thread(target=heartbeat_loop, daemon=True)
     t.start()
     app.run(host='0.0.0.0', port=8085, debug=False)
 else:
     _load_nodes_from_db()
+    _load_tasks_from_db()
     t = threading.Thread(target=heartbeat_loop, daemon=True)
     t.start()
