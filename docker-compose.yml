@@ -21,15 +21,16 @@
 #   Ollama Vulkan:
 #     docker compose --profile vulkan up -d
 #
-# Dashboard:  http://localhost:8085/dashboard
+# Dashboard:  http://<IP-HOST>:8099          ← accessibile da tutta la LAN
+# Dashboard:  http://localhost:8099           (locale)
+# Control Plane: http://localhost:8085
 # Registry:   http://localhost:8086/nodes
 # Node 1:     http://localhost:8081
-# Landing:    https://sanctuary-mower-plated.ngrok-free.dev
 # ============================================================
 
 services:
 
-  # ── Registry — discovery dinamico dei nodi ──────────
+  # ── Registry — discovery dinamico dei nodi ──────────────
   registry:
     build:
       context: ./registry
@@ -52,7 +53,37 @@ services:
       retries: 5
       start_period: 20s
 
-  # ── Ollama CPU (profile: cpu) ────────────────────────
+  # ── Infra-UI Bridge — dashboard + SSE proxy ───────────────
+  # Serve dashboard.html e proxizza CP/Registry via HTTP puro.
+  # Accessibile da qualsiasi browser in LAN su http://<IP>:8099
+  bridge:
+    build:
+      context: ./infra-ui
+      dockerfile: Dockerfile
+    container_name: hyperspace_bridge
+    depends_on:
+      registry:
+        condition: service_healthy
+      control-plane:
+        condition: service_started
+    ports:
+      - "0.0.0.0:${BRIDGE_PORT:-8099}:8099"
+    environment:
+      CP_URL:        "http://control-plane:8085"
+      REGISTRY_URL:  "http://registry:8086"
+      POLL_INTERVAL: "${POLL_INTERVAL:-4}"
+      PYTHONUNBUFFERED: "1"
+    networks:
+      - hyperspace
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8099/status"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ── Ollama CPU (profile: cpu) ─────────────────────────
   ollama:
     image: ollama/ollama:latest
     container_name: hyperspace_ollama
@@ -67,7 +98,7 @@ services:
     networks:
       - hyperspace
 
-  # ── Ollama NVIDIA GPU (profile: nvidia) ─────────────
+  # ── Ollama NVIDIA GPU (profile: nvidia) ────────────────
   ollama-nvidia:
     image: ollama/ollama:latest
     container_name: hyperspace_ollama_nvidia
@@ -91,7 +122,7 @@ services:
     networks:
       - hyperspace
 
-  # ── Ollama AMD ROCm (profile: amd) ──────────────────
+  # ── Ollama AMD ROCm (profile: amd) ───────────────────
   ollama-amd:
     image: ollama/ollama:rocm
     container_name: hyperspace_ollama_amd
@@ -111,7 +142,7 @@ services:
     networks:
       - hyperspace
 
-  # ── Ollama Intel GPU (profile: intel) ───────────────
+  # ── Ollama Intel GPU (profile: intel) ─────────────────
   ollama-intel:
     image: ollama/ollama:latest
     container_name: hyperspace_ollama_intel
@@ -131,7 +162,7 @@ services:
     networks:
       - hyperspace
 
-  # ── Ollama Vulkan GPU (profile: vulkan) ──────────────
+  # ── Ollama Vulkan GPU (profile: vulkan) ────────────────
   ollama-vulkan:
     image: ollama/ollama:latest
     container_name: hyperspace_ollama_vulkan
@@ -150,7 +181,7 @@ services:
     networks:
       - hyperspace
 
-  # ── Open WebUI ───────────────────────────────────────
+  # ── Open WebUI ───────────────────────────────────
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: hyperspace_open_webui
@@ -167,7 +198,7 @@ services:
       - hyperspace
     restart: unless-stopped
 
-  # ── Control Plane + Dashboard ────────────────────────
+  # ── Control Plane + Dashboard API ───────────────────
   control-plane:
     build:
       context: .
@@ -196,7 +227,7 @@ services:
       - hyperspace
     restart: unless-stopped
 
-  # ── Nodo 1 ───────────────────────────────────────────
+  # ── Nodo 1 ──────────────────────────────────────────
   node-1:
     build:
       context: .
