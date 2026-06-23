@@ -84,7 +84,8 @@ services:
       start_period: 15s
 
   # -- Memory Graph -- esporta memoria CP -> .md nel vault ------------------------------
-  # API: GET http://localhost:8090/status  GET /export
+  # API: GET http://localhost:8090/status  GET /export  POST /export/force
+  # Titolatore LLM: usa qwen2:0.5b su Ollama host per generare titoli coerenti
   memory-graph:
     build:
       context: ./memory-graph
@@ -97,19 +98,22 @@ services:
     volumes:
       - ./data/obsidian-vault:/vault
     environment:
-      CP_URL:          "http://control-plane:8085"
-      VAULT_PATH:      "/vault"
-      EXPORT_INTERVAL: "${MEMORY_EXPORT_INTERVAL:-30}"
+      CP_URL:           "http://control-plane:8085"
+      VAULT_PATH:       "/vault"
+      EXPORT_INTERVAL:  "${MEMORY_EXPORT_INTERVAL:-30}"
+      TITLER_ENABLED:   "${TITLER_ENABLED:-true}"
+      TITLER_URL:       "${TITLER_URL:-http://host.docker.internal:11434}"
+      TITLER_MODEL:     "${TITLER_MODEL:-qwen2:0.5b}"
+      TITLER_BACKEND:   "${TITLER_BACKEND:-ollama}"
       PYTHONUNBUFFERED: "1"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - hyperspace
     restart: unless-stopped
 
   # -- Obsidian (LinuxServer) -- GUI nel browser via KasmVNC ----------------------------
   # http://localhost:8091  password: abc
-  # Al primo avvio: Obsidian apre automaticamente, seleziona Open folder as vault
-  # e naviga in /config/vaults per trovare le note generate da memory-graph
-  # La stessa cartella e' visibile su Mac in ./data/obsidian-vault
   obsidian:
     image: lscr.io/linuxserver/obsidian:latest
     container_name: hyperspace_obsidian
@@ -314,10 +318,6 @@ services:
     restart: unless-stopped
 
 #  node-2:
-#    build:
-#      context: .
-#      dockerfile: node/Dockerfile
-#    container_name: hyperspace_node_2
 #    ...
 
 networks:
