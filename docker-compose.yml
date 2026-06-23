@@ -26,13 +26,13 @@
 # Registry:        http://localhost:8086/nodes
 # Node 1:          http://localhost:8081
 # Memory Exporter: http://localhost:8090/status
-# Obsidian GUI:    http://localhost:8091   <- Obsidian completo nel browser
+# Obsidian GUI:    http://localhost:8091   <- Obsidian nel browser (KasmVNC)
 #                  vault su Mac: ./data/obsidian-vault
 # ============================================================
 
 services:
 
-  # -- Registry -- discovery dinamico dei nodi ------------------------------------------
+  # -- Registry -------------------------------------------------------------------------
   registry:
     build:
       context: ./registry
@@ -55,7 +55,7 @@ services:
       retries: 5
       start_period: 20s
 
-  # -- Infra-UI Bridge -- dashboard + SSE proxy -----------------------------------------
+  # -- Infra-UI Bridge ------------------------------------------------------------------
   bridge:
     build:
       context: ./infra-ui
@@ -83,9 +83,8 @@ services:
       retries: 3
       start_period: 15s
 
-  # -- Memory Graph -- esporta memoria CP -> file .md nel vault -------------------------
-  # Scrive .md in ./data/obsidian-vault (visibile anche da Mac Finder e Obsidian desktop)
-  # API: GET http://localhost:8090/status  GET /export  POST /export/force
+  # -- Memory Graph -- esporta memoria CP -> .md nel vault ------------------------------
+  # API: GET http://localhost:8090/status  GET /export
   memory-graph:
     build:
       context: ./memory-graph
@@ -106,26 +105,31 @@ services:
       - hyperspace
     restart: unless-stopped
 
-  # -- Obsidian Remote -- GUI Obsidian completa nel browser -----------------------------
-  # http://localhost:8091  ->  Open folder as vault -> /vaults
-  # La stessa cartella e' accessibile su Mac in ./data/obsidian-vault
+  # -- Obsidian (LinuxServer) -- GUI nel browser via KasmVNC ----------------------------
+  # http://localhost:8091  password: abc
+  # Al primo avvio: Obsidian apre automaticamente, seleziona Open folder as vault
+  # e naviga in /config/vaults per trovare le note generate da memory-graph
+  # La stessa cartella e' visibile su Mac in ./data/obsidian-vault
   obsidian:
-    image: ghcr.io/sytone/obsidian-remote:latest
+    image: lscr.io/linuxserver/obsidian:latest
     container_name: hyperspace_obsidian
     depends_on:
       - memory-graph
     ports:
-      - "8091:8080"
+      - "8091:3000"
     volumes:
-      - ./data/obsidian-vault:/vaults
+      - ./data/obsidian-vault:/config/vaults
       - obsidian_config:/config
     environment:
       PUID: "1000"
       PGID: "1000"
       TZ: "${TZ:-Europe/Rome}"
+    security_opt:
+      - seccomp:unconfined
     networks:
       - hyperspace
     restart: unless-stopped
+    shm_size: "1gb"
 
   # -- Ollama CPU (profile: cpu) ---------------------------------------------------------
   ollama:
@@ -242,7 +246,7 @@ services:
       - hyperspace
     restart: unless-stopped
 
-  # -- Control Plane + Dashboard API ----------------------------------------------------
+  # -- Control Plane --------------------------------------------------------------------
   control-plane:
     build:
       context: .
