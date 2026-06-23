@@ -1,0 +1,9 @@
+{
+  "id": "obsidian-3d-graph",
+  "name": "3D Graph",
+  "version": "1.4.1",
+  "minAppVersion": "0.15.0",
+  "description": "3D force-directed graph for your vault",
+  "author": "HyperSpace AGI",
+  "isDesktopOnly": false
+}

@@ -1,0 +1,28 @@
+{
+  "collapse-filter": false,
+  "search": "",
+  "showTags": true,
+  "showAttachments": false,
+  "hideUnresolved": false,
+  "showOrphans": true,
+  "collapse-color-groups": false,
+  "colorGroups": [
+    { "query": "tag:connection_test", "color": { "a": 1, "rgb": 3329330 } },
+    { "query": "tag:memory_sync",    "color": { "a": 1, "rgb": 8388736 } },
+    { "query": "tag:mesh_event",     "color": { "a": 1, "rgb": 16737792 } },
+    { "query": "tag:inter_node_message", "color": { "a": 1, "rgb": 3407615 } },
+    { "query": "tag:system",         "color": { "a": 1, "rgb": 6710886 } }
+  ],
+  "collapse-display": false,
+  "showArrow": true,
+  "textFadeMultiplier": 0,
+  "nodeSizeMultiplier": 1.5,
+  "lineSizeMultiplier": 1,
+  "collapse-forces": false,
+  "centerStrength": 0.518713248970312,
+  "repelStrength": 10,
+  "linkStrength": 1,
+  "linkDistance": 30,
+  "scale": 1,
+  "close": false
+}
