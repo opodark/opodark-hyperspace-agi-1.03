@@ -4,86 +4,157 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HyperSpace-AGI — Live Mesh Dashboard</title>
-<style>
-  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-  :root{
-    --font-display:'Orbitron',monospace;
-    --font-body:'Share Tech Mono',monospace;
-    --color-bg:#060810;
-    --color-primary:#00f5ff;
-    --color-accent:#a855f7;
-    --color-success:#22c55e;
-    --color-warning:#f59e0b;
-    --color-danger:#ef4444;
-    --color-text:#e2e8f0;
-    --color-muted:#64748b;
-  }
-  html,body{width:100%;height:100%;overflow:hidden;background:var(--color-bg);color:var(--color-text);font-family:var(--font-body)}
-  canvas{display:block;position:fixed;inset:0;z-index:0}
-  header{position:fixed;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;justify-content:space-between;padding:14px 24px;background:linear-gradient(180deg,rgba(6,8,16,.95) 0%,transparent 100%);border-bottom:1px solid rgba(0,245,255,.08)}
-  .logo{display:flex;align-items:center;gap:10px}
-  .logo svg{width:28px;height:28px}
-  .logo-text{font-family:var(--font-display);font-size:.85rem;letter-spacing:.15em;color:var(--color-primary);text-shadow:0 0 12px rgba(0,245,255,.6)}
-  .logo-sub{font-size:.6rem;color:var(--color-muted);letter-spacing:.1em;margin-top:2px}
-  .hud-status{display:flex;gap:20px;align-items:center}
-  .status-dot{width:7px;height:7px;border-radius:50%;background:var(--color-success);box-shadow:0 0 6px var(--color-success);animation:pulse-dot 2s infinite}
-  .status-dot.warn{background:var(--color-warning);box-shadow:0 0 6px var(--color-warning)}
-  .status-dot.err{background:var(--color-danger);box-shadow:0 0 6px var(--color-danger);animation:none}
-  @keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.4}}
-  .status-label{font-size:.65rem;color:var(--color-muted);letter-spacing:.08em;text-transform:uppercase}
-  .status-val{font-size:.75rem;color:var(--color-primary);font-family:var(--font-display)}
-  .panel{position:fixed;z-index:10;background:rgba(6,8,16,.82);border:1px solid rgba(0,245,255,.12);backdrop-filter:blur(12px);border-radius:8px;padding:16px;min-width:200px}
-  .panel-title{font-family:var(--font-display);font-size:.62rem;letter-spacing:.15em;color:var(--color-primary);text-transform:uppercase;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid rgba(0,245,255,.1)}
-  .panel-left{left:20px;top:50%;transform:translateY(-50%)}
-  .panel-right{right:20px;top:50%;transform:translateY(-50%)}
-  .node-item{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.04)}
-  .node-item:last-child{border-bottom:none}
-  .node-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-  .node-name{font-size:.7rem;color:var(--color-text);letter-spacing:.05em}
-  .node-role{font-size:.58rem;color:var(--color-muted);margin-top:1px}
-  .node-ping{font-size:.58rem;margin-left:auto;font-family:var(--font-display)}
-  .badge{font-size:.55rem;padding:1px 5px;border-radius:3px;margin-left:4px;font-family:var(--font-display)}
-  .badge-ok{background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.3)}
-  .badge-off{background:rgba(100,116,139,.15);color:#64748b;border:1px solid rgba(100,116,139,.3)}
-  .stat-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04)}
-  .stat-row:last-child{border-bottom:none}
-  .stat-key{font-size:.62rem;color:var(--color-muted);letter-spacing:.06em}
-  .stat-val{font-size:.7rem;font-family:var(--font-display);color:var(--color-primary)}
-  .gauge-wrap{margin-top:8px}
-  .gauge-label{display:flex;justify-content:space-between;font-size:.58rem;color:var(--color-muted);margin-bottom:4px}
-  .gauge-track{height:3px;background:rgba(255,255,255,.06);border-radius:2px;overflow:hidden}
-  .gauge-fill{height:100%;border-radius:2px;transition:width .8s ease}
-  footer{position:fixed;bottom:0;left:0;right:0;z-index:10;display:flex;align-items:center;justify-content:space-between;padding:10px 24px;background:linear-gradient(0deg,rgba(6,8,16,.95) 0%,transparent 100%);border-top:1px solid rgba(0,245,255,.06)}
-  .footer-item{display:flex;flex-direction:column;align-items:center;gap:2px}
-  .footer-key{font-size:.55rem;color:var(--color-muted);text-transform:uppercase;letter-spacing:.08em}
-  .footer-val{font-size:.75rem;font-family:var(--font-display);color:var(--color-text)}
-  .footer-divider{width:1px;height:28px;background:rgba(0,245,255,.1)}
-  .tooltip{position:fixed;z-index:20;pointer-events:none;background:rgba(6,8,16,.95);border:1px solid rgba(0,245,255,.25);border-radius:6px;padding:10px 14px;font-size:.68rem;min-width:160px;display:none}
-  .tooltip.visible{display:block}
-  .tooltip-name{font-family:var(--font-display);font-size:.72rem;color:var(--color-primary);margin-bottom:6px}
-  .tooltip-row{display:flex;justify-content:space-between;gap:20px;padding:2px 0;color:var(--color-muted)}
-  .tooltip-row span:last-child{color:var(--color-text)}
-  .center-hud{position:fixed;z-index:5;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none}
-  .center-label{font-family:var(--font-display);font-size:.6rem;letter-spacing:.2em;color:rgba(0,245,255,.2);text-transform:uppercase}
-  #conn-indicator{position:fixed;bottom:52px;right:24px;z-index:20;font-size:.6rem;font-family:var(--font-display);display:flex;align-items:center;gap:6px;opacity:.8}
-  #conn-dot{width:6px;height:6px;border-radius:50%;background:var(--color-muted);transition:background .5s}
-  #log-panel{position:fixed;bottom:52px;left:50%;transform:translateX(-50%);z-index:10;background:rgba(6,8,16,.85);border:1px solid rgba(0,245,255,.08);border-radius:6px;padding:8px 14px;width:460px;max-height:90px;overflow:hidden;backdrop-filter:blur(8px)}
-  #log-list{list-style:none;display:flex;flex-direction:column-reverse;gap:2px}
-  .log-entry{font-size:.6rem;color:var(--color-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;animation:fadeIn .4s forwards}
-  .log-entry.task{color:var(--color-primary)}
-  .log-entry.memory{color:var(--color-success)}
-  .log-entry.dream{color:#c084fc}
-  .log-entry.chat{color:#fb923c}
-  .log-entry.warn{color:var(--color-warning)}
-  @keyframes fadeIn{to{opacity:1}}
-</style>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --font-d:'Orbitron',monospace;--font-b:'Share Tech Mono',monospace;
+  --bg:#060810;--p:#00f5ff;--acc:#a855f7;--ok:#22c55e;--warn:#f59e0b;--err:#ef4444;
+  --txt:#e2e8f0;--muted:#64748b;--panel:rgba(6,8,16,.88);
+}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--txt);font-family:var(--font-b)}
+canvas{display:block;position:fixed;inset:0;z-index:0}
+/* ── HEADER ── */
+header{position:fixed;top:0;left:0;right:0;z-index:20;display:flex;align-items:center;justify-content:space-between;padding:12px 20px;background:linear-gradient(180deg,rgba(6,8,16,.97) 0%,transparent 100%);border-bottom:1px solid rgba(0,245,255,.08)}
+.logo{display:flex;align-items:center;gap:10px}
+.logo-text{font-family:var(--font-d);font-size:.82rem;letter-spacing:.15em;color:var(--p);text-shadow:0 0 12px rgba(0,245,255,.5)}
+.logo-sub{font-size:.58rem;color:var(--muted);letter-spacing:.1em;margin-top:2px}
+.hud{display:flex;gap:16px;align-items:center}
+.hud-item{display:flex;flex-direction:column;align-items:center;gap:1px}
+.hud-key{font-size:.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+.hud-val{font-size:.72rem;font-family:var(--font-d);color:var(--p)}
+.hdiv{width:1px;height:26px;background:rgba(0,245,255,.08)}
+.sdot{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 6px var(--ok);animation:pd 2s infinite}
+.sdot.warn{background:var(--warn);box-shadow:0 0 6px var(--warn)}
+.sdot.err{background:var(--err);box-shadow:0 0 6px var(--err);animation:none}
+@keyframes pd{0%,100%{opacity:1}50%{opacity:.35}}
+/* ── SIDEBAR ── */
+#sidebar{
+  position:fixed;right:0;top:54px;bottom:42px;z-index:15;
+  width:340px;background:var(--panel);border-left:1px solid rgba(0,245,255,.1);
+  backdrop-filter:blur(14px);display:flex;flex-direction:column;
+  transform:translateX(100%);transition:transform .3s ease;
+}
+#sidebar.open{transform:translateX(0)}
+.sb-tabs{display:flex;border-bottom:1px solid rgba(0,245,255,.08);flex-shrink:0}
+.sb-tab{flex:1;padding:10px 4px;text-align:center;font-size:.6rem;font-family:var(--font-d);letter-spacing:.1em;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;transition:all .2s;text-transform:uppercase}
+.sb-tab:hover{color:var(--p)}
+.sb-tab.active{color:var(--p);border-bottom-color:var(--p)}
+.sb-pane{flex:1;overflow-y:auto;padding:14px;display:none;flex-direction:column;gap:10px}
+.sb-pane.active{display:flex}
+.sb-pane::-webkit-scrollbar{width:3px}
+.sb-pane::-webkit-scrollbar-thumb{background:rgba(0,245,255,.2);border-radius:2px}
+/* ── NODE DETAIL ── */
+.nd-header{display:flex;align-items:center;gap:10px;padding-bottom:10px;border-bottom:1px solid rgba(0,245,255,.08)}
+.nd-dot{width:12px;height:12px;border-radius:50%;flex-shrink:0}
+.nd-name{font-family:var(--font-d);font-size:.8rem;color:var(--p)}
+.nd-role{font-size:.6rem;color:var(--muted)}
+.nd-stats{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.nd-stat{background:rgba(0,245,255,.04);border:1px solid rgba(0,245,255,.08);border-radius:5px;padding:8px}
+.nd-stat-key{font-size:.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px}
+.nd-stat-val{font-size:.78rem;font-family:var(--font-d);color:var(--p)}
+.nd-tasks-title{font-size:.6rem;font-family:var(--font-d);letter-spacing:.1em;color:var(--acc);text-transform:uppercase;margin-top:4px}
+.nd-task-item{background:rgba(168,85,247,.06);border:1px solid rgba(168,85,247,.12);border-radius:4px;padding:7px 9px;font-size:.62rem}
+.nd-task-id{color:var(--acc);font-family:var(--font-d);font-size:.6rem}
+.nd-task-prompt{color:var(--txt);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nd-task-status{display:inline-block;margin-top:4px;font-size:.55rem;padding:1px 5px;border-radius:3px;font-family:var(--font-d)}
+.s-done{background:rgba(34,197,94,.15);color:var(--ok);border:1px solid rgba(34,197,94,.25)}
+.s-pending{background:rgba(245,158,11,.15);color:var(--warn);border:1px solid rgba(245,158,11,.25)}
+.s-failed{background:rgba(239,68,68,.15);color:var(--err);border:1px solid rgba(239,68,68,.25)}
+.s-assigned{background:rgba(0,245,255,.1);color:var(--p);border:1px solid rgba(0,245,255,.2)}
+/* ── TASK QUEUE ── */
+.tq-filter{display:flex;gap:6px;flex-wrap:wrap;flex-shrink:0}
+.tq-btn{font-size:.58rem;padding:3px 8px;border-radius:4px;cursor:pointer;font-family:var(--font-d);letter-spacing:.05em;background:rgba(0,245,255,.05);color:var(--muted);border:1px solid rgba(0,245,255,.1);transition:all .15s}
+.tq-btn.on{background:rgba(0,245,255,.12);color:var(--p);border-color:rgba(0,245,255,.3)}
+.tq-item{border-radius:5px;padding:9px 11px;border:1px solid rgba(0,245,255,.08);background:rgba(0,245,255,.03);cursor:pointer;transition:border-color .15s}
+.tq-item:hover{border-color:rgba(0,245,255,.25)}
+.tq-top{display:flex;justify-content:space-between;align-items:center}
+.tq-id{font-family:var(--font-d);font-size:.62rem;color:var(--p)}
+.tq-time{font-size:.55rem;color:var(--muted)}
+.tq-prompt{font-size:.65rem;color:var(--txt);margin:4px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tq-footer{display:flex;gap:6px;align-items:center}
+.tq-node{font-size:.55rem;color:var(--muted)}
+.tq-empty{font-size:.65rem;color:var(--muted);text-align:center;padding:20px 0}
+/* ── DREAM LOG ── */
+.dream-item{border-left:2px solid #c084fc;padding:7px 10px;background:rgba(192,132,252,.05);border-radius:0 5px 5px 0}
+.dream-node{font-size:.58rem;color:#c084fc;font-family:var(--font-d)}
+.dream-text{font-size:.65rem;color:var(--txt);margin-top:3px;line-height:1.4}
+.dream-time{font-size:.52rem;color:var(--muted);margin-top:3px}
+/* ── CHAT FEED ── */
+.chat-item{padding:7px 10px;border-radius:5px;border:1px solid rgba(251,146,60,.1);background:rgba(251,146,60,.04)}
+.chat-src{font-size:.6rem;font-family:var(--font-d)}
+.chat-arrow{color:var(--muted);margin:0 4px}
+.chat-dst{font-size:.6rem;font-family:var(--font-d)}
+.chat-msg{font-size:.65rem;color:var(--txt);margin-top:3px;font-style:italic}
+.chat-time{font-size:.52rem;color:var(--muted);margin-top:2px}
+/* ── MEMORY ── */
+.mem-header{display:flex;justify-content:space-between;align-items:center;flex-shrink:0}
+.mem-search{flex:1;margin-left:8px;padding:4px 8px;background:rgba(0,245,255,.04);border:1px solid rgba(0,245,255,.1);border-radius:4px;color:var(--txt);font-family:var(--font-b);font-size:.65rem;outline:none}
+.mem-search:focus{border-color:rgba(0,245,255,.3)}
+.mem-item{border-radius:5px;padding:8px 10px;border:1px solid rgba(34,197,94,.1);background:rgba(34,197,94,.03)}
+.mem-type{font-size:.55rem;font-family:var(--font-d);color:var(--ok);text-transform:uppercase;letter-spacing:.08em}
+.mem-content{font-size:.63rem;color:var(--txt);margin:3px 0;line-height:1.4;max-height:52px;overflow:hidden}
+.mem-meta{font-size:.52rem;color:var(--muted)}
+/* ── LEFT PANEL ── */
+#left-panel{position:fixed;left:16px;top:50%;transform:translateY(-50%);z-index:10;background:var(--panel);border:1px solid rgba(0,245,255,.1);backdrop-filter:blur(12px);border-radius:8px;padding:14px;width:195px}
+.panel-title{font-family:var(--font-d);font-size:.58rem;letter-spacing:.15em;color:var(--p);text-transform:uppercase;margin-bottom:10px;padding-bottom:7px;border-bottom:1px solid rgba(0,245,255,.08)}
+.node-row{display:flex;align-items:center;gap:7px;padding:5px 6px;border-radius:5px;cursor:pointer;transition:background .15s;border:1px solid transparent}
+.node-row:hover{background:rgba(0,245,255,.06);border-color:rgba(0,245,255,.12)}
+.node-row.selected{background:rgba(0,245,255,.1);border-color:rgba(0,245,255,.25)}
+.nr-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.nr-name{font-size:.67rem;color:var(--txt);letter-spacing:.04em}
+.nr-role{font-size:.55rem;color:var(--muted)}
+.nr-ping{font-size:.55rem;margin-left:auto;font-family:var(--font-d)}
+.badge{font-size:.5rem;padding:1px 4px;border-radius:3px;font-family:var(--font-d)}
+.b-ok{background:rgba(34,197,94,.12);color:var(--ok);border:1px solid rgba(34,197,94,.25)}
+.b-off{background:rgba(100,116,139,.12);color:var(--muted);border:1px solid rgba(100,116,139,.2)}
+/* ── FOOTER ── */
+footer{position:fixed;bottom:0;left:0;right:0;z-index:20;display:flex;align-items:center;justify-content:space-between;padding:8px 20px;background:linear-gradient(0deg,rgba(6,8,16,.97) 0%,transparent 100%);border-top:1px solid rgba(0,245,255,.06)}
+.ft-item{display:flex;flex-direction:column;align-items:center;gap:1px}
+.ft-key{font-size:.52rem;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+.ft-val{font-size:.72rem;font-family:var(--font-d);color:var(--txt)}
+/* ── CONN ── */
+#conn{position:fixed;bottom:50px;right:${16}px;z-index:25;display:flex;align-items:center;gap:6px;font-size:.58rem;font-family:var(--font-d)}
+#cdot{width:6px;height:6px;border-radius:50%;background:var(--muted);transition:background .4s}
+/* ── LOG STRIP ── */
+#log-strip{position:fixed;bottom:46px;left:210px;right:360px;z-index:10;background:rgba(6,8,16,.82);border:1px solid rgba(0,245,255,.07);border-radius:5px;padding:6px 12px;overflow:hidden;max-height:78px}
+#log-list{list-style:none;display:flex;flex-direction:column-reverse;gap:2px}
+.log-entry{font-size:.58rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;animation:fi .35s forwards}
+.log-entry.task{color:var(--p)}.log-entry.memory{color:var(--ok)}.log-entry.dream{color:#c084fc}.log-entry.chat{color:#fb923c}.log-entry.warn{color:var(--warn)}
+@keyframes fi{to{opacity:1}}
+/* ── OPEN BTN ── */
+#toggle-btn{position:fixed;right:0;top:50%;transform:translateY(-50%);z-index:16;background:rgba(0,245,255,.1);border:1px solid rgba(0,245,255,.2);border-right:none;border-radius:6px 0 0 6px;padding:12px 7px;cursor:pointer;writing-mode:vertical-lr;font-family:var(--font-d);font-size:.55rem;letter-spacing:.15em;color:var(--p);transition:background .2s}
+#toggle-btn:hover{background:rgba(0,245,255,.18)}
+#sidebar.open~#toggle-btn{right:340px}
+/* ── TOOLTIP ── */
+#tooltip{position:fixed;z-index:30;pointer-events:none;background:rgba(6,8,16,.97);border:1px solid rgba(0,245,255,.2);border-radius:6px;padding:9px 12px;font-size:.65rem;min-width:150px;display:none}
+#tooltip.v{display:block}
+.tt-name{font-family:var(--font-d);font-size:.7rem;color:var(--p);margin-bottom:5px}
+.tt-row{display:flex;justify-content:space-between;gap:18px;padding:1px 0;color:var(--muted)}
+.tt-row span:last-child{color:var(--txt)}
+/* ── TASK DETAIL MODAL ── */
+#modal{position:fixed;inset:0;z-index:50;background:rgba(6,8,16,.85);display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+#modal.v{display:flex}
+.modal-box{background:#0b0f1e;border:1px solid rgba(0,245,255,.2);border-radius:8px;padding:20px 24px;width:480px;max-height:70vh;overflow-y:auto;position:relative}
+.modal-title{font-family:var(--font-d);font-size:.78rem;color:var(--p);letter-spacing:.12em;margin-bottom:14px;text-transform:uppercase}
+.modal-close{position:absolute;top:14px;right:16px;cursor:pointer;font-size:.9rem;color:var(--muted);background:none;border:none;font-family:var(--font-b)}
+.modal-close:hover{color:var(--p)}
+.modal-row{display:flex;gap:10px;margin-bottom:7px;font-size:.65rem}
+.modal-key{color:var(--muted);width:90px;flex-shrink:0}
+.modal-val{color:var(--txt);word-break:break-all}
+.modal-sep{height:1px;background:rgba(0,245,255,.07);margin:10px 0}
+.modal-result{background:rgba(0,245,255,.04);border:1px solid rgba(0,245,255,.08);border-radius:5px;padding:10px;font-size:.6rem;color:#94a3b8;white-space:pre-wrap;max-height:180px;overflow-y:auto}
+/* ── SCROLLBAR ── */
+*::-webkit-scrollbar{width:3px}
+*::-webkit-scrollbar-thumb{background:rgba(0,245,255,.15);border-radius:2px}
+</style>
 </head>
 <body>
 <canvas id="c"></canvas>
+
 <header>
   <div class="logo">
-    <svg viewBox="0 0 28 28" fill="none">
+    <svg width="26" height="26" viewBox="0 0 28 28" fill="none">
       <circle cx="14" cy="14" r="13" stroke="#00f5ff" stroke-width="1" opacity=".4"/>
       <circle cx="14" cy="14" r="8" stroke="#00f5ff" stroke-width="1"/>
       <circle cx="14" cy="14" r="3" fill="#00f5ff" opacity=".8"/>
@@ -91,366 +162,524 @@
       <line x1="1" y1="14" x2="27" y2="14" stroke="#00f5ff" stroke-width=".5" opacity=".3"/>
       <ellipse cx="14" cy="14" rx="13" ry="5" stroke="#a855f7" stroke-width=".8" opacity=".5"/>
     </svg>
-    <div>
-      <div class="logo-text">HYPERSPACE·AGI</div>
-      <div class="logo-sub">DISTRIBUTED AGENT MESH v1.02</div>
-    </div>
+    <div><div class="logo-text">HYPERSPACE·AGI</div><div class="logo-sub">DISTRIBUTED AGENT MESH v1.02</div></div>
   </div>
-  <div class="hud-status">
+  <div class="hud">
     <div style="display:flex;align-items:center;gap:6px">
-      <div class="status-dot" id="mesh-dot"></div>
-      <div><div class="status-label">Mesh Status</div><div class="status-val" id="mesh-status">CONNECTING…</div></div>
+      <div class="sdot" id="mesh-dot"></div>
+      <div class="hud-item"><span class="hud-key">Mesh</span><span class="hud-val" id="mesh-status">INIT</span></div>
     </div>
-    <div style="width:1px;height:28px;background:rgba(0,245,255,.1)"></div>
-    <div><div class="status-label">Active Nodes</div><div class="status-val" id="hdr-nodes">—</div></div>
-    <div style="width:1px;height:28px;background:rgba(0,245,255,.1)"></div>
-    <div><div class="status-label">Events/s</div><div class="status-val" id="hdr-tps">—</div></div>
-    <div style="width:1px;height:28px;background:rgba(0,245,255,.1)"></div>
-    <div><div class="status-label">Memory</div><div class="status-val" id="hdr-mem">—</div></div>
-    <div style="width:1px;height:28px;background:rgba(0,245,255,.1)"></div>
-    <div><div class="status-label">File Size</div><div class="status-val" id="hdr-fsize">—</div></div>
+    <div class="hdiv"></div>
+    <div class="hud-item"><span class="hud-key">Nodes</span><span class="hud-val" id="hdr-nodes">—</span></div>
+    <div class="hdiv"></div>
+    <div class="hud-item"><span class="hud-key">Events/s</span><span class="hud-val" id="hdr-tps">—</span></div>
+    <div class="hdiv"></div>
+    <div class="hud-item"><span class="hud-key">Memory</span><span class="hud-val" id="hdr-mem">—</span></div>
+    <div class="hdiv"></div>
+    <div class="hud-item"><span class="hud-key">Tasks</span><span class="hud-val" id="hdr-tasks">—</span></div>
+    <div class="hdiv"></div>
+    <div class="hud-item"><span class="hud-key">Dreams</span><span class="hud-val" id="hdr-dreams">—</span></div>
   </div>
 </header>
 
-<div class="panel panel-left">
+<!-- LEFT PANEL -->
+<div id="left-panel">
   <div class="panel-title">Mesh Nodes</div>
   <div id="node-list"></div>
 </div>
 
-<div class="panel panel-right">
-  <div class="panel-title">Control Plane</div>
-  <div class="stat-row"><span class="stat-key">TTL Days</span><span class="stat-val" id="cp-ttl">—</span></div>
-  <div class="stat-row"><span class="stat-key">Max Entries</span><span class="stat-val" id="cp-max">—</span></div>
-  <div class="stat-row"><span class="stat-key">Compress</span><span class="stat-val">gzip</span></div>
-  <div class="stat-row"><span class="stat-key">Transport</span><span class="stat-val">REST/ngrok</span></div>
-  <div class="stat-row"><span class="stat-key">Bridge</span><span class="stat-val" id="cp-bridge">—</span></div>
-  <div class="gauge-wrap">
-    <div class="gauge-label"><span>Memory usage</span><span id="mem-pct">0%</span></div>
-    <div class="gauge-track"><div class="gauge-fill" id="mem-bar" style="width:0%;background:var(--color-primary)"></div></div>
+<!-- SIDEBAR -->
+<div id="sidebar">
+  <div class="sb-tabs">
+    <div class="sb-tab active" data-tab="node" onclick="switchTab('node')">Node</div>
+    <div class="sb-tab" data-tab="tasks" onclick="switchTab('tasks')">Tasks</div>
+    <div class="sb-tab" data-tab="dreams" onclick="switchTab('dreams')">Dreams</div>
+    <div class="sb-tab" data-tab="chat" onclick="switchTab('chat')">Chat</div>
+    <div class="sb-tab" data-tab="memory" onclick="switchTab('memory')">Memory</div>
   </div>
-  <div class="gauge-wrap" style="margin-top:10px">
-    <div class="gauge-label"><span>Active nodes</span><span id="nodes-pct">0%</span></div>
-    <div class="gauge-track"><div class="gauge-fill" id="nodes-bar" style="width:0%;background:var(--color-accent)"></div></div>
+
+  <!-- NODE DETAIL -->
+  <div class="sb-pane active" id="pane-node">
+    <div id="nd-content"><p style="font-size:.65rem;color:var(--muted);padding-top:10px">Click a node on the sphere or in the list to see details.</p></div>
+  </div>
+
+  <!-- TASK QUEUE -->
+  <div class="sb-pane" id="pane-tasks">
+    <div class="tq-filter" id="tq-filter">
+      <button class="tq-btn on" onclick="setTqFilter('all',this)">All</button>
+      <button class="tq-btn" onclick="setTqFilter('done',this)">Done</button>
+      <button class="tq-btn" onclick="setTqFilter('assigned',this)">Active</button>
+      <button class="tq-btn" onclick="setTqFilter('failed',this)">Failed</button>
+      <button class="tq-btn" onclick="setTqFilter('created',this)">Pending</button>
+    </div>
+    <div id="tq-list"></div>
+  </div>
+
+  <!-- DREAM LOG -->
+  <div class="sb-pane" id="pane-dreams">
+    <div id="dream-list"></div>
+  </div>
+
+  <!-- CHAT FEED -->
+  <div class="sb-pane" id="pane-chat">
+    <div id="chat-list"></div>
+  </div>
+
+  <!-- MEMORY -->
+  <div class="sb-pane" id="pane-memory">
+    <div class="mem-header">
+      <span style="font-size:.58rem;color:var(--muted)">Filter:</span>
+      <input class="mem-search" id="mem-search" placeholder="search content…" oninput="renderMemory()">
+    </div>
+    <div id="mem-list"></div>
   </div>
 </div>
 
-<div class="center-hud"><div class="center-label">control plane</div></div>
+<button id="toggle-btn" onclick="toggleSidebar()">DETAIL</button>
 
-<div class="tooltip" id="tooltip">
-  <div class="tooltip-name" id="tt-name"></div>
-  <div class="tooltip-row"><span>Role</span><span id="tt-role"></span></div>
-  <div class="tooltip-row"><span>Model</span><span id="tt-model"></span></div>
-  <div class="tooltip-row"><span>Status</span><span id="tt-status"></span></div>
-  <div class="tooltip-row"><span>Ping</span><span id="tt-ping"></span></div>
-  <div class="tooltip-row"><span>Last seen</span><span id="tt-seen"></span></div>
-</div>
+<!-- LOG STRIP -->
+<div id="log-strip"><ul id="log-list"></ul></div>
 
-<div id="log-panel"><ul id="log-list"></ul></div>
-
-<div id="conn-indicator">
-  <div id="conn-dot"></div>
-  <span id="conn-label">connecting…</span>
+<!-- CONN INDICATOR -->
+<div id="conn" style="position:fixed;bottom:50px;right:16px;z-index:25;display:flex;align-items:center;gap:6px;font-size:.58rem;font-family:'Orbitron',monospace">
+  <div id="cdot" style="width:6px;height:6px;border-radius:50%;background:#64748b;transition:background .4s"></div>
+  <span id="clabel">connecting…</span>
 </div>
 
 <footer>
-  <div class="footer-item"><div class="footer-key">Uptime</div><div class="footer-val" id="ft-uptime">00:00:00</div></div>
-  <div class="footer-divider"></div>
-  <div class="footer-item"><div class="footer-key">Total Events</div><div class="footer-val" id="ft-total">0</div></div>
-  <div class="footer-divider"></div>
-  <div class="footer-item"><div class="footer-key">CP Port</div><div class="footer-val">:8085</div></div>
-  <div class="footer-divider"></div>
-  <div class="footer-item"><div class="footer-key">Registry</div><div class="footer-val">:8086</div></div>
-  <div class="footer-divider"></div>
-  <div class="footer-item"><div class="footer-key">Bridge</div><div class="footer-val">:8099</div></div>
-  <div class="footer-divider"></div>
-  <div class="footer-item"><div class="footer-key">Framework</div><div class="footer-val">HyperSpace v1.02</div></div>
+  <div class="ft-item"><span class="ft-key">Uptime</span><span class="ft-val" id="ft-up">00:00:00</span></div>
+  <div style="width:1px;height:24px;background:rgba(0,245,255,.07)"></div>
+  <div class="ft-item"><span class="ft-key">Events</span><span class="ft-val" id="ft-ev">0</span></div>
+  <div style="width:1px;height:24px;background:rgba(0,245,255,.07)"></div>
+  <div class="ft-item"><span class="ft-key">CP</span><span class="ft-val">:8085</span></div>
+  <div style="width:1px;height:24px;background:rgba(0,245,255,.07)"></div>
+  <div class="ft-item"><span class="ft-key">Registry</span><span class="ft-val">:8086</span></div>
+  <div style="width:1px;height:24px;background:rgba(0,245,255,.07)"></div>
+  <div class="ft-item"><span class="ft-key">Bridge</span><span class="ft-val">:8099</span></div>
+  <div style="width:1px;height:24px;background:rgba(0,245,255,.07)"></div>
+  <div class="ft-item"><span class="ft-key">Mode</span><span class="ft-val" id="ft-mode">—</span></div>
 </footer>
 
+<!-- TOOLTIP -->
+<div id="tooltip">
+  <div class="tt-name" id="tt-name"></div>
+  <div class="tt-row"><span>Role</span><span id="tt-role"></span></div>
+  <div class="tt-row"><span>Model</span><span id="tt-model"></span></div>
+  <div class="tt-row"><span>Status</span><span id="tt-status"></span></div>
+  <div class="tt-row"><span>Ping</span><span id="tt-ping"></span></div>
+  <div class="tt-row"><span>Click for details</span><span style="color:var(--p)">→</span></div>
+</div>
+
+<!-- TASK DETAIL MODAL -->
+<div id="modal">
+  <div class="modal-box">
+    <button class="modal-close" onclick="closeModal()">✕</button>
+    <div class="modal-title" id="modal-title">Task Detail</div>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
 <script>
-// ── CONFIG ─────────────────────────────────────────────────────────────────
-const BRIDGE = 'http://localhost:8099';
-const LINK_BASE_OPACITY   = 0.04;
-const LINK_ACTIVE_OPACITY = 0.90;
-const LINK_DECAY          = 0.016;
-const LINK_MIN_WIDTH      = 0.5;
-const LINK_MAX_WIDTH      = 2.8;
-const FLASH_PULSE_SPEED   = 0.20;
+const BRIDGE='http://localhost:8099';
+const CP='http://localhost:8085';
 
-// ── STATIC NODE REGISTRY (augmented by live /mesh/nodes) ─────────────────
-const NODES = [
-  {id:'cp',  name:'Control Plane', role:'Orchestrator',     model:'—',            color:'#00f5ff', size:18, ping:2,  status:'active'},
-  {id:'n1',  name:'node-1',        role:'Executor',         model:'phi3:mini',    color:'#a855f7', size:11, ping:12, status:'unknown'},
-  {id:'n2',  name:'node-2',        role:'Executor',         model:'llama3:8b',    color:'#a855f7', size:11, ping:18, status:'unknown'},
-  {id:'n3',  name:'node-3',        role:'Planner',          model:'mistral:7b',   color:'#ff6b35', size:12, ping:9,  status:'unknown'},
-  {id:'n4',  name:'node-4',        role:'Memory',           model:'qwen:4b',      color:'#22c55e', size:10, ping:24, status:'unknown'},
-  {id:'n5',  name:'node-5',        role:'Executor',         model:'phi3:mini',    color:'#a855f7', size:10, ping:31, status:'unknown'},
-  {id:'n6',  name:'remote-A',      role:'Remote Peer',      model:'llama3:8b-q4', color:'#f59e0b', size:9,  ping:67, status:'unknown'},
-  {id:'reg', name:'Registry',      role:'Service Discovery',model:'—',            color:'#64748b', size:8,  ping:1,  status:'active'},
-];
+// ── SIDEBAR STATE ─────────────────────────────────────────────────────────
+let sidebarOpen=false,activeTab='node',tqFilter='all';
+let selectedNode=null;
 
-// live node_id -> NODES entry mapping (populated from heartbeat)
-const liveNodeMap = {}; // live node_id (e.g. "abc123") -> NODES entry
-
-const LINK_DEFS = [
-  ['cp','n1'],['cp','n2'],['cp','n3'],['cp','n4'],['cp','n5'],
-  ['n3','n1'],['n3','n2'],['n4','n1'],['n4','n2'],
-  ['n1','n5'],['cp','n6'],['cp','reg'],['n3','n6'],
-];
-const links = LINK_DEFS.map(([a,b])=>({a,b,energy:0,pulse:-1,dir:1,type:'task'}));
-const linkMap={};
-links.forEach(l=>{linkMap[l.a+'|'+l.b]=l;linkMap[l.b+'|'+l.a]=l;});
-
-function resolveId(rawId){
-  // try exact match first
-  if(NODES.find(n=>n.id===rawId)) return rawId;
-  // try live map
-  const mapped = liveNodeMap[rawId];
-  if(mapped) return mapped.id;
-  // fuzzy: node_id contains one of our node names
-  for(const n of NODES){
-    if(rawId.toLowerCase().includes(n.name.toLowerCase()) ||
-       n.name.toLowerCase().includes(rawId.toLowerCase())) return n.id;
-  }
-  // fallback: map first char to a node pool
-  const pool=['n1','n2','n3','n4','n5'];
-  return pool[rawId.charCodeAt(0)%pool.length];
+function toggleSidebar(){
+  sidebarOpen=!sidebarOpen;
+  document.getElementById('sidebar').classList.toggle('open',sidebarOpen);
+  document.getElementById('toggle-btn').style.right=sidebarOpen?'340px':'0';
+}
+function switchTab(t){
+  activeTab=t;
+  document.querySelectorAll('.sb-tab').forEach(el=>el.classList.toggle('active',el.dataset.tab===t));
+  document.querySelectorAll('.sb-pane').forEach(el=>el.classList.toggle('active',el.id==='pane-'+t));
+  if(t==='tasks') renderTaskQueue();
+  if(t==='memory') fetchAndRenderMemory();
+}
+function setTqFilter(f,btn){
+  tqFilter=f;
+  document.querySelectorAll('.tq-btn').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  renderTaskQueue();
 }
 
-function fireLink(fromRaw, toRaw, type='task'){
-  const from=resolveId(fromRaw), to=resolveId(toRaw);
-  if(from===to) return;
-  const l=linkMap[from+'|'+to];
-  if(!l) return;
-  l.energy=1.0; l.pulse=0;
-  l.dir=(l.a===from)?1:-1;
-  l.type=type;
-  totalEvents++;
-}
-
-// ── CANVAS ───────────────────────────────────────────────────────────────────
-const canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
-let W,H,cx,cy;
-function resize(){W=canvas.width=window.innerWidth;H=canvas.height=window.innerHeight;cx=W/2;cy=H/2;}
-resize();window.addEventListener('resize',resize);
-const SPHERE_R=()=>Math.min(W,H)*0.28;
-function spherePos(i,total,r){const phi=Math.acos(1-2*(i+.5)/total),theta=Math.PI*(1+Math.sqrt(5))*i;return{x:r*Math.sin(phi)*Math.cos(theta),y:r*Math.sin(phi)*Math.sin(theta),z:r*Math.cos(phi)};}
-let nodePositions={};
-function buildPositions(){const r=SPHERE_R();nodePositions['cp']={x:0,y:0,z:0};const peri=NODES.filter(n=>n.id!=='cp');peri.forEach((n,i)=>{nodePositions[n.id]=spherePos(i,peri.length,r);});}
-buildPositions();window.addEventListener('resize',buildPositions);
-let rotX=0.15,rotY=0,autoRotY=0,isDragging=false,lastMX=0,lastMY=0;
-function rotatePoint(p,rx,ry){let x1=p.x*Math.cos(ry)+p.z*Math.sin(ry),z1=-p.x*Math.sin(ry)+p.z*Math.cos(ry),y2=p.y*Math.cos(rx)-z1*Math.sin(rx),z2=p.y*Math.sin(rx)+z1*Math.cos(rx);return{x:x1,y:y2,z:z2};}
-function project(p){const fov=900,z=p.z+fov,s=fov/z;return{x:cx+p.x*s,y:cy+p.y*s,scale:s};}
-function getPN(ry,rx){return NODES.map(n=>{const rot=rotatePoint(nodePositions[n.id]||{x:0,y:0,z:0},rx,ry),proj=project(rot);return{...n,px:proj.x,py:proj.y,pscale:proj.scale,pz:rot.z};}).sort((a,b)=>a.pz-b.pz);}
-const particles=[];
-for(let i=0;i<120;i++){const phi=Math.random()*Math.PI*2,theta=Math.random()*Math.PI*2,r=SPHERE_R()*(0.9+Math.random()*0.4);particles.push({x:r*Math.sin(theta)*Math.cos(phi),y:r*Math.sin(theta)*Math.sin(phi),z:r*Math.cos(theta),size:Math.random()*1.5+.3,brightness:Math.random(),tw:Math.random()*Math.PI*2});}
-const rings=[{rx:0,ry:0,rf:1.15,color:'#00f5ff',opacity:.07},{rx:Math.PI/2,ry:.3,rf:1.05,color:'#a855f7',opacity:.05},{rx:.4,ry:Math.PI/3,rf:.9,color:'#ff6b35',opacity:.04}];
-function drawRing(ring,ry,rx){const r=SPHERE_R()*ring.rf,steps=120;ctx.beginPath();for(let i=0;i<=steps;i++){const a=(i/steps)*Math.PI*2,p={x:r*Math.cos(a),y:r*Math.sin(a)*Math.cos(ring.rx),z:r*Math.sin(a)*Math.sin(ring.rx)},pr=rotatePoint(p,rx,ry+ring.ry),pp=project(pr);i===0?ctx.moveTo(pp.x,pp.y):ctx.lineTo(pp.x,pp.y);}ctx.closePath();ctx.strokeStyle=ring.color;ctx.globalAlpha=ring.opacity;ctx.lineWidth=1;ctx.stroke();ctx.globalAlpha=1;}
-function lerp(a,b,t){return a+(b-a)*t;}
-function hexToRgb(h){return`${parseInt(h.slice(1,3),16)},${parseInt(h.slice(3,5),16)},${parseInt(h.slice(5,7),16)}`;}
-function typeColor(t){return t==='memory'?'#22c55e':t==='dream'?'#c084fc':t==='chat'?'#fb923c':t==='heartbeat'?'#64748b':'#00f5ff';}
-
-// ── STATE ───────────────────────────────────────────────────────────────────
+// ── DATA STORES ───────────────────────────────────────────────────────────
+let taskStore={}; // id->task
+let dreamStore=[]; // [{node,label,ts}]
+let chatStore=[];  // [{src,dst,msg,ts}]
+let memStore=[];
 let totalEvents=0,lastTotal=0,eps=0,epsTimer=0;
 let memEntries=0,memMax=200,memFileSizeKb=0,memTTL=7;
 let startTime=Date.now(),hoveredNode=null,lastFrameTime=performance.now();
-let liveMode=false,activeNodeCount=0;
+let liveMode=false,activeNodeCount=0,lastEventTs=Date.now();
 
-// ── LOG ──────────────────────────────────────────────────────────────────────
-const logList=document.getElementById('log-list');
-function addLog(msg,type='task'){
-  const li=document.createElement('li');
-  li.className=`log-entry ${type}`;
-  li.textContent=`[${new Date().toLocaleTimeString('it-IT')}] ${msg}`;
-  logList.prepend(li);
-  while(logList.children.length>5) logList.removeChild(logList.lastChild);
+// ── NODES ─────────────────────────────────────────────────────────────────
+const NODES=[
+  {id:'cp', name:'Control Plane',role:'Orchestrator',    model:'—',           color:'#00f5ff',size:18,ping:2, status:'active',   tasks_assigned:0,tasks_done:0},
+  {id:'n1', name:'node-1',       role:'Executor',        model:'phi3:mini',   color:'#a855f7',size:11,ping:12,status:'unknown',  tasks_assigned:0,tasks_done:0},
+  {id:'n2', name:'node-2',       role:'Executor',        model:'llama3:8b',   color:'#a855f7',size:11,ping:18,status:'unknown',  tasks_assigned:0,tasks_done:0},
+  {id:'n3', name:'node-3',       role:'Planner',         model:'mistral:7b',  color:'#ff6b35',size:12,ping:9, status:'unknown',  tasks_assigned:0,tasks_done:0},
+  {id:'n4', name:'node-4',       role:'Memory',          model:'qwen:4b',     color:'#22c55e',size:10,ping:24,status:'unknown',  tasks_assigned:0,tasks_done:0},
+  {id:'n5', name:'node-5',       role:'Executor',        model:'phi3:mini',   color:'#a855f7',size:10,ping:31,status:'unknown',  tasks_assigned:0,tasks_done:0},
+  {id:'n6', name:'remote-A',     role:'Remote Peer',     model:'llama3:8b-q4',color:'#f59e0b',size:9, ping:67,status:'unknown',  tasks_assigned:0,tasks_done:0},
+  {id:'reg',name:'Registry',     role:'Service Discovery',model:'—',          color:'#64748b',size:8, ping:1, status:'active',   tasks_assigned:0,tasks_done:0},
+];
+const liveNodeMap={};
+
+function resolveId(raw){
+  if(NODES.find(n=>n.id===raw)) return raw;
+  const m=liveNodeMap[raw]; if(m) return m.id;
+  for(const n of NODES) if(raw.toLowerCase().includes(n.name.toLowerCase())||n.name.toLowerCase().includes(raw.toLowerCase())) return n.id;
+  const pool=['n1','n2','n3','n4','n5'];
+  return pool[raw.charCodeAt(0)%pool.length];
 }
 
-// ── NODE LIST ──────────────────────────────────────────────────────────────
+function selectNode(nodeId){
+  selectedNode=nodeId;
+  document.querySelectorAll('.node-row').forEach(r=>r.classList.toggle('selected',r.dataset.id===nodeId));
+  if(!sidebarOpen) toggleSidebar();
+  switchTab('node');
+  renderNodeDetail(nodeId);
+}
+
+function renderNodeDetail(nid){
+  const n=NODES.find(x=>x.id===nid)||{name:nid,role:'?',model:'?',color:'#64748b',ping:'?',status:'?'};
+  const myTasks=Object.values(taskStore).filter(t=>t.node===nid||t.node===n.name).slice(-8).reverse();
+  const assignedCount=myTasks.length;
+  const doneCount=myTasks.filter(t=>t.status==='done').length;
+  const failCount=myTasks.filter(t=>t.status==='failed').length;
+  document.getElementById('nd-content').innerHTML=`
+    <div class="nd-header">
+      <div class="nd-dot" style="background:${n.color};box-shadow:0 0 8px ${n.color}"></div>
+      <div><div class="nd-name">${n.name}</div><div class="nd-role">${n.role}</div></div>
+    </div>
+    <div class="nd-stats">
+      <div class="nd-stat"><div class="nd-stat-key">Status</div><div class="nd-stat-val" style="color:${n.status==='active'?'var(--ok)':n.status==='unreachable'?'var(--err)':'var(--muted)'}">${n.status}</div></div>
+      <div class="nd-stat"><div class="nd-stat-key">Ping</div><div class="nd-stat-val" style="color:${n.ping<20?'var(--ok)':n.ping<50?'var(--warn)':'var(--err)'}">${n.ping}ms</div></div>
+      <div class="nd-stat"><div class="nd-stat-key">Model</div><div class="nd-stat-val" style="font-size:.65rem">${n.model}</div></div>
+      <div class="nd-stat"><div class="nd-stat-key">Tasks done</div><div class="nd-stat-val">${doneCount}/${assignedCount}</div></div>
+      <div class="nd-stat"><div class="nd-stat-key">Failed</div><div class="nd-stat-val" style="color:${failCount>0?'var(--err)':'var(--ok)'}">${failCount}</div></div>
+      <div class="nd-stat"><div class="nd-stat-key">Last seen</div><div class="nd-stat-val" style="font-size:.58rem">${n.lastSeen?new Date(n.lastSeen).toLocaleTimeString('it-IT'):'—'}</div></div>
+    </div>
+    ${myTasks.length>0?`<div class="nd-tasks-title" style="margin-top:8px;margin-bottom:6px">Recent Tasks (${myTasks.length})</div>`+
+      myTasks.map(t=>`<div class="nd-task-item">
+        <div class="nd-task-id">#${t.id}</div>
+        <div class="nd-task-prompt">${(t.payload&&t.payload.prompt)||t.summary||'—'}</div>
+        <span class="nd-task-status s-${t.status}">${t.status}</span>
+      </div>`).join('')
+    :'<p style="font-size:.62rem;color:var(--muted);margin-top:10px">No tasks recorded for this node yet.</p>'}
+  `;
+}
+
 function renderNodeList(){
   const list=document.getElementById('node-list');
   list.innerHTML='';
   NODES.forEach(n=>{
     const div=document.createElement('div');
-    div.className='node-item';
+    div.className='node-row'+(selectedNode===n.id?' selected':'');
+    div.dataset.id=n.id;
+    div.onclick=()=>selectNode(n.id);
     const live=n.status==='active';
     div.innerHTML=`
-      <div class="node-dot" style="background:${n.color};box-shadow:0 0 5px ${n.color}"></div>
-      <div><div class="node-name">${n.name}</div><div class="node-role">${n.role}</div></div>
+      <div class="nr-dot" style="background:${n.color};box-shadow:0 0 4px ${n.color}"></div>
+      <div><div class="nr-name">${n.name}</div><div class="nr-role">${n.role}</div></div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
-        <span class="node-ping" style="color:${n.ping<20?'#22c55e':n.ping<50?'#f59e0b':'#ef4444'}">${n.ping}ms</span>
-        <span class="badge ${live?'badge-ok':'badge-off'}">${live?'LIVE':'IDLE'}</span>
+        <span class="nr-ping" style="color:${n.ping<20?'var(--ok)':n.ping<50?'var(--warn)':'var(--err)'}">${n.ping}ms</span>
+        <span class="badge ${live?'b-ok':'b-off'}">${live?'ON':'—'}</span>
       </div>`;
     list.appendChild(div);
   });
 }
 renderNodeList();
 
-// ── SSE ───────────────────────────────────────────────────────────────────────
-function setConn(mode){
-  const colors={live:'#22c55e',poll:'#f59e0b',demo:'#64748b',connecting:'#64748b'};
-  const labels={live:'SSE live ●',poll:'REST poll',demo:'demo mode',connecting:'connecting…'};
-  document.getElementById('conn-dot').style.background=colors[mode]||'#64748b';
-  document.getElementById('conn-label').textContent=labels[mode]||mode;
-  document.getElementById('cp-bridge').textContent=mode==='live'?'SSE':mode==='poll'?'REST':'offline';
-  if(mode==='live'||mode==='poll'){
-    document.getElementById('mesh-dot').className='status-dot';
-    document.getElementById('mesh-status').textContent='ONLINE';
+// ── TASK QUEUE ────────────────────────────────────────────────────────────
+function renderTaskQueue(){
+  const list=document.getElementById('tq-list');
+  let tasks=Object.values(taskStore).sort((a,b)=>(b.created_at||'').localeCompare(a.created_at||''));
+  if(tqFilter!=='all') tasks=tasks.filter(t=>t.status===tqFilter);
+  document.getElementById('hdr-tasks').textContent=Object.keys(taskStore).length;
+  if(!tasks.length){
+    list.innerHTML='<div class="tq-empty">No tasks '+( tqFilter!=='all'?'with status «'+tqFilter+'»':'')+'</div>';
+    return;
   }
+  list.innerHTML=tasks.map(t=>{
+    const ts=t.created_at?new Date(t.created_at).toLocaleTimeString('it-IT'):'';
+    const prompt=(t.payload&&t.payload.prompt)||t.summary||'—';
+    return `<div class="tq-item" onclick="showTaskDetail('${t.id}')">
+      <div class="tq-top"><span class="tq-id">#${t.id}</span><span class="tq-time">${ts}</span></div>
+      <div class="tq-prompt">${prompt}</div>
+      <div class="tq-footer">
+        <span class="nd-task-status s-${t.status}">${t.status}</span>
+        ${t.node?`<span class="tq-node">→ ${t.node}</span>`:''}
+        ${t.payload&&t.payload.model?`<span class="tq-node" style="margin-left:auto">${t.payload.model}</span>`:''}
+      </div>
+    </div>`;
+  }).join('');
 }
 
-function connectSSE(){
-  setConn('connecting');
-  const es=new EventSource(`${BRIDGE}/events`);
-  es.addEventListener('connected',()=>{
-    liveMode=true;
-    setConn('live');
-    addLog('Bridge SSE connected','task');
-  });
-  es.addEventListener('heartbeat',e=>{
-    try{
-      const d=JSON.parse(e.data);
-      const nid=d.node_id||'';
-      // find matching NODES entry by partial name match
-      let matched=NODES.find(n=>n.id===nid);
-      if(!matched){
-        // assign to first non-active node as live stand-in
-        matched=NODES.find(n=>n.id!=='cp'&&n.id!=='reg'&&n.status!=='active');
-      }
-      if(matched){
-        matched.status='active';
-        matched.ping=d.ping||matched.ping;
-        liveNodeMap[nid]=matched;
-        activeNodeCount=NODES.filter(n=>n.status==='active'&&n.id!=='cp'&&n.id!=='reg').length;
-        renderNodeList();
-        fireLink('cp',matched.id,'heartbeat');
-      }
-    }catch(_){}
-  });
-  es.addEventListener('task',e=>{
-    try{
-      const d=JSON.parse(e.data);
-      fireLink(d.from,d.to,d.type||'task');
-      addLog(`${d.label||'task'}: ${d.from}→${d.to}`,d.type||'task');
-    }catch(_){}
-  });
-  es.addEventListener('memory_sync',e=>{
-    try{
-      const d=JSON.parse(e.data);
-      fireLink(d.from||'cp',d.to||'n4','memory');
-      addLog(`mem-sync: ${d.label||''}`, 'memory');
-    }catch(_){}
-  });
-  es.addEventListener('memory_stats',e=>{
-    try{
-      const d=JSON.parse(e.data);
-      memEntries=d.entries??memEntries;
-      memMax=d.max_entries??memMax;
-      memFileSizeKb=d.file_size_kb??memFileSizeKb;
-      memTTL=d.ttl_days??memTTL;
-      document.getElementById('cp-ttl').textContent=memTTL;
-      document.getElementById('cp-max').textContent=memMax;
-      document.getElementById('hdr-fsize').textContent=memFileSizeKb.toFixed(1)+' KB';
-    }catch(_){}
-  });
-  es.addEventListener('dream',e=>{
-    try{
-      const d=JSON.parse(e.data);
-      addLog(`✨ ${d.node}: ${d.label}`,'dream');
-      // fire a random link to visualise dream
-      const pool=['n1','n2','n3','n4','n5'];
-      fireLink('cp',pool[Math.floor(Math.random()*pool.length)],'dream');
-    }catch(_){}
-  });
-  es.onerror=()=>{
-    liveMode=false;
-    setConn('poll');
-    es.close();
-    setTimeout(connectSSE, 5000); // retry
-  };
+function showTaskDetail(id){
+  const t=taskStore[id]||{};
+  const prompt=(t.payload&&t.payload.prompt)||'—';
+  const model=(t.payload&&t.payload.model)||'—';
+  const result=t.result?JSON.stringify(t.result,null,2):'No result yet';
+  document.getElementById('modal-title').textContent='Task #'+id;
+  document.getElementById('modal-body').innerHTML=`
+    <div class="modal-row"><span class="modal-key">Status</span><span class="modal-val"><span class="nd-task-status s-${t.status}">${t.status}</span></span></div>
+    <div class="modal-row"><span class="modal-key">Node</span><span class="modal-val">${t.node||'—'}</span></div>
+    <div class="modal-row"><span class="modal-key">Model</span><span class="modal-val">${model}</span></div>
+    <div class="modal-row"><span class="modal-key">Created</span><span class="modal-val">${t.created_at||'—'}</span></div>
+    ${t.completed_at?`<div class="modal-row"><span class="modal-key">Completed</span><span class="modal-val">${t.completed_at}</span></div>`:''}
+    ${t.routing_score?`<div class="modal-row"><span class="modal-key">Route score</span><span class="modal-val">${t.routing_score}</span></div>`:''}
+    <div class="modal-sep"></div>
+    <div class="modal-row"><span class="modal-key">Prompt</span></div>
+    <div class="modal-result" style="color:var(--txt);margin-bottom:8px">${prompt}</div>
+    <div class="modal-row"><span class="modal-key">Result</span></div>
+    <div class="modal-result">${result}</div>
+    ${t.error?`<div class="modal-sep"></div><div class="modal-row"><span class="modal-key" style="color:var(--err)">Error</span><span class="modal-val" style="color:var(--err)">${t.error}</span></div>`:''}
+  `;
+  document.getElementById('modal').classList.add('v');
+}
+function closeModal(){document.getElementById('modal').classList.remove('v');}
+document.getElementById('modal').addEventListener('click',e=>{if(e.target===document.getElementById('modal'))closeModal();});
+
+// ── DREAM LOG ─────────────────────────────────────────────────────────────
+function pushDream(node,label,ts){
+  dreamStore.unshift({node,label,ts:ts||new Date().toISOString()});
+  if(dreamStore.length>50) dreamStore.pop();
+  document.getElementById('hdr-dreams').textContent=dreamStore.length;
+  if(activeTab==='dreams') renderDreams();
+}
+function renderDreams(){
+  const list=document.getElementById('dream-list');
+  if(!dreamStore.length){list.innerHTML='<div class="tq-empty">No dream events yet.</div>';return;}
+  list.innerHTML=dreamStore.map(d=>{
+    const t=new Date(d.ts).toLocaleTimeString('it-IT');
+    return `<div class="dream-item"><div class="dream-node">✦ ${d.node}</div><div class="dream-text">${d.label}</div><div class="dream-time">${t}</div></div>`;
+  }).join('');
 }
 
-// ── DEMO FALLBACK (fires if no SSE event arrives in 6s) ───────────────────
-const DEMO_ROUTES=[
-  {from:'cp',to:'n3',w:3},{from:'n3',to:'n1',w:4},{from:'n3',to:'n2',w:3},
-  {from:'cp',to:'n4',w:2},{from:'n4',to:'n1',w:2},{from:'n4',to:'n2',w:2},
-  {from:'n1',to:'cp',w:2},{from:'n2',to:'cp',w:2},
-  {from:'cp',to:'n5',w:1},{from:'cp',to:'n6',w:1},{from:'n3',to:'n6',w:1},
-];
-const demoTW=DEMO_ROUTES.reduce((s,r)=>s+r.w,0);
-function demoRoute(){let r=Math.random()*demoTW,acc=0;for(const rt of DEMO_ROUTES){acc+=rt.w;if(r<acc)return rt;}return DEMO_ROUTES[0];}
-let demoTimer=0,demoNextIn=350,lastEventTs=Date.now();
+// ── CHAT FEED ─────────────────────────────────────────────────────────────
+function pushChat(src,dst,msg,ts){
+  chatStore.unshift({src,dst,msg,ts:ts||new Date().toISOString()});
+  if(chatStore.length>80) chatStore.pop();
+  if(activeTab==='chat') renderChat();
+}
+function renderChat(){
+  const list=document.getElementById('chat-list');
+  if(!chatStore.length){list.innerHTML='<div class="tq-empty">No chat events yet.</div>';return;}
+  list.innerHTML=chatStore.map(c=>{
+    const t=new Date(c.ts).toLocaleTimeString('it-IT');
+    const sc=NODES.find(n=>n.name===c.src||n.id===c.src),dc=NODES.find(n=>n.name===c.dst||n.id===c.dst);
+    const sc_col=sc?sc.color:'#fb923c',dc_col=dc?dc.color:'#fb923c';
+    return `<div class="chat-item">
+      <span class="chat-src" style="color:${sc_col}">${c.src}</span>
+      <span class="chat-arrow">→</span>
+      <span class="chat-dst" style="color:${dc_col}">${c.dst}</span>
+      <div class="chat-msg">${c.msg}</div>
+      <div class="chat-time">${t}</div>
+    </div>`;
+  }).join('');
+}
 
-// ── DRAW ──────────────────────────────────────────────────────────────────────
+// ── MEMORY ────────────────────────────────────────────────────────────────
+async function fetchAndRenderMemory(){
+  try{
+    const r=await fetch(`${BRIDGE}/proxy/memory?limit=60`);
+    if(r.ok){
+      const d=await r.json();
+      memStore=(d.entries||[]).reverse();
+      renderMemory();
+    }
+  }catch(_){}
+}
+function renderMemory(){
+  const q=document.getElementById('mem-search').value.toLowerCase();
+  const list=document.getElementById('mem-list');
+  let items=memStore.filter(m=>!q||JSON.stringify(m).toLowerCase().includes(q));
+  if(!items.length){list.innerHTML='<div class="tq-empty">No memory entries.</div>';return;}
+  list.innerHTML=items.slice(0,40).map(m=>{
+    const content=m.content||m.summary||m.detail||JSON.stringify(m).slice(0,120);
+    const ts=m.ts||m.timestamp||'';
+    const type=m.type||m.event_type||'memory';
+    const src=m.sourceNode||m.node_id||'';
+    return `<div class="mem-item">
+      <div style="display:flex;justify-content:space-between">
+        <span class="mem-type">${type}</span>
+        ${src?`<span style="font-size:.52rem;color:var(--muted)">${src}</span>`:''}
+      </div>
+      <div class="mem-content">${content}</div>
+      <div class="mem-meta">${ts?new Date(ts).toLocaleString('it-IT'):''}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── FETCH TASKS FROM CP ───────────────────────────────────────────────────
+async function fetchTasks(){
+  try{
+    const r=await fetch(`${BRIDGE}/proxy/tasks`);
+    if(r.ok){
+      const d=await r.json();
+      if(d&&typeof d==='object'){
+        Object.assign(taskStore,d);
+        if(activeTab==='tasks') renderTaskQueue();
+        document.getElementById('hdr-tasks').textContent=Object.keys(taskStore).length;
+      }
+    }
+  }catch(_){}
+}
+
+// ── FETCH LOGS FOR DREAM & CHAT ──────────────────────────────────────────
+async function fetchLogs(){
+  // dreams
+  try{
+    const r=await fetch(`${BRIDGE}/proxy/logs?type=dream&per_page=20&page=1`);
+    if(r.ok){
+      const d=await r.json();
+      (d.logs||[]).forEach(l=>{
+        const key=l.id;
+        if(!dreamStore.find(x=>x.id===key)){
+          pushDream(l.sourceNode||'?',l.summary||l.detail||'',l.ts);
+          if(!dreamStore[dreamStore.length-1]) dreamStore[dreamStore.length-1]={id:key};
+          else dreamStore[0].id=key;
+        }
+      });
+    }
+  }catch(_){}
+  // chat
+  try{
+    const r=await fetch(`${BRIDGE}/proxy/logs?type=node_chat&per_page=40&page=1`);
+    if(r.ok){
+      const d=await r.json();
+      (d.logs||[]).forEach(l=>{
+        if(!chatStore.find(x=>x.id===l.id)){
+          const msg=l.summary||l.detail||'';
+          pushChat(l.sourceNode||'?',l.targetNode||'?',msg,l.ts);
+          chatStore[0].id=l.id;
+        }
+      });
+    }
+  }catch(_){}
+}
+
+setInterval(fetchTasks,8000);
+setInterval(fetchLogs,10000);
+fetchTasks();fetchLogs();
+
+// ── LOG STRIP ─────────────────────────────────────────────────────────────
+const logList=document.getElementById('log-list');
+function addLog(msg,type='task'){
+  const li=document.createElement('li');
+  li.className=`log-entry ${type}`;
+  li.textContent=`[${new Date().toLocaleTimeString('it-IT')}] ${msg}`;
+  logList.prepend(li);
+  while(logList.children.length>4) logList.removeChild(logList.lastChild);
+}
+
+// ── CANVAS + SPHERE ───────────────────────────────────────────────────────
+const canvas=document.getElementById('c'),ctx2=canvas.getContext('2d');
+let W,H,cxc,cyc;
+function resize(){W=canvas.width=window.innerWidth;H=canvas.height=window.innerHeight;cxc=W/2;cyc=H/2;}
+resize();window.addEventListener('resize',()=>{resize();buildPositions();});
+const SR=()=>Math.min(W,H)*0.26;
+function spherePos(i,total,r){const phi=Math.acos(1-2*(i+.5)/total),theta=Math.PI*(1+Math.sqrt(5))*i;return{x:r*Math.sin(phi)*Math.cos(theta),y:r*Math.sin(phi)*Math.sin(theta),z:r*Math.cos(phi)};}
+let nodePos={};
+function buildPositions(){const r=SR();nodePos['cp']={x:0,y:0,z:0};const peri=NODES.filter(n=>n.id!=='cp');peri.forEach((n,i)=>{nodePos[n.id]=spherePos(i,peri.length,r);});}
+buildPositions();
+let rotX2=0.15,rotY2=0,autoRY=0,dragging=false,lmx=0,lmy=0;
+function rot(p,rx,ry){let x1=p.x*Math.cos(ry)+p.z*Math.sin(ry),z1=-p.x*Math.sin(ry)+p.z*Math.cos(ry),y2=p.y*Math.cos(rx)-z1*Math.sin(rx),z2=p.y*Math.sin(rx)+z1*Math.cos(rx);return{x:x1,y:y2,z:z2};}
+function proj(p){const fov=900,z=p.z+fov,s=fov/z;return{x:cxc+p.x*s,y:cyc+p.y*s,scale:s};}
+function getPN(ry,rx){return NODES.map(n=>{const r2=rot(nodePos[n.id]||{x:0,y:0,z:0},rx,ry),p2=proj(r2);return{...n,px:p2.x,py:p2.y,ps:p2.scale,pz:r2.z};}).sort((a,b)=>a.pz-b.pz);}
+
+const PARTICLES=[];
+for(let i=0;i<100;i++){const phi=Math.random()*Math.PI*2,theta=Math.random()*Math.PI*2,r=SR()*(0.9+Math.random()*.4);PARTICLES.push({x:r*Math.sin(theta)*Math.cos(phi),y:r*Math.sin(theta)*Math.sin(phi),z:r*Math.cos(theta),sz:Math.random()*1.4+.3,br:Math.random(),tw:Math.random()*Math.PI*2});}
+const RINGS=[{rx:0,ry:0,rf:1.15,c:'#00f5ff',o:.07},{rx:Math.PI/2,ry:.3,rf:1.05,c:'#a855f7',o:.05},{rx:.4,ry:Math.PI/3,rf:.9,c:'#ff6b35',o:.04}];
+function drawRing(ring,ry,rx){const r=SR()*ring.rf,steps=100;ctx2.beginPath();for(let i=0;i<=steps;i++){const a=(i/steps)*Math.PI*2,p={x:r*Math.cos(a),y:r*Math.sin(a)*Math.cos(ring.rx),z:r*Math.sin(a)*Math.sin(ring.rx)},pr=rot(p,rx,ry+ring.ry),pp=proj(pr);i===0?ctx2.moveTo(pp.x,pp.y):ctx2.lineTo(pp.x,pp.y);}ctx2.closePath();ctx2.strokeStyle=ring.c;ctx2.globalAlpha=ring.o;ctx2.lineWidth=1;ctx2.stroke();ctx2.globalAlpha=1;}
+function lerp(a,b,t){return a+(b-a)*t;}
+function h2r(h){return`${parseInt(h.slice(1,3),16)},${parseInt(h.slice(3,5),16)},${parseInt(h.slice(5,7),16)}`;}
+function typeColor(t){return t==='memory'?'#22c55e':t==='dream'?'#c084fc':t==='chat'?'#fb923c':t==='heartbeat'?'#64748b':'#00f5ff';}
+
+const LINK_DEFS=[['cp','n1'],['cp','n2'],['cp','n3'],['cp','n4'],['cp','n5'],['n3','n1'],['n3','n2'],['n4','n1'],['n4','n2'],['n1','n5'],['cp','n6'],['cp','reg'],['n3','n6']];
+const links=LINK_DEFS.map(([a,b])=>({a,b,energy:0,pulse:-1,dir:1,type:'task'}));
+const linkMap={};
+links.forEach(l=>{linkMap[l.a+'|'+l.b]=l;linkMap[l.b+'|'+l.a]=l;});
+
+function fireLink(fromRaw,toRaw,type='task'){
+  lastEventTs=Date.now();
+  const from=resolveId(fromRaw),to=resolveId(toRaw);
+  if(from===to) return;
+  const l=linkMap[from+'|'+to]; if(!l) return;
+  l.energy=1.0;l.pulse=0;l.dir=(l.a===from)?1:-1;l.type=type;
+  totalEvents++;
+}
+
+// ── DEMO ──────────────────────────────────────────────────────────────────
+const DR=[{f:'cp',t:'n3',w:3},{f:'n3',t:'n1',w:4},{f:'n3',t:'n2',w:3},{f:'cp',t:'n4',w:2},{f:'n4',t:'n1',w:2},{f:'n4',t:'n2',w:2},{f:'n1',t:'cp',w:2},{f:'n2',t:'cp',w:2},{f:'cp',t:'n5',w:1},{f:'cp',t:'n6',w:1}];
+const DTW=DR.reduce((s,r)=>s+r.w,0);
+function demoRoute(){let r=Math.random()*DTW,acc=0;for(const rt of DR){acc+=rt.w;if(r<acc)return rt;}return DR[0];}
+let demoTimer=0,demoNextIn=350,inDemoMode=false;
+
+// ── DRAW LOOP ─────────────────────────────────────────────────────────────
 function draw(ts){
   requestAnimationFrame(draw);
-  const dt=Math.min(ts-lastFrameTime,50);
-  lastFrameTime=ts;
-  if(!isDragging) autoRotY+=.0025;
-  const ry=autoRotY+rotY,rx=rotX;
-  ctx.fillStyle='#060810';ctx.fillRect(0,0,W,H);
-  particles.forEach(p=>{const rot=rotatePoint(p,rx,ry),proj=project(rot);if(proj.scale<.5)return;const tw=.5+.5*Math.sin(p.tw+ts*.001);ctx.beginPath();ctx.arc(proj.x,proj.y,p.size*proj.scale*.18,0,Math.PI*2);ctx.fillStyle=`rgba(200,220,255,${p.brightness*tw*.6})`;ctx.fill();});
-  rings.forEach(r=>drawRing(r,ry,rx));
-  const projNodes=getPN(ry,rx);
-  const nodeMap={}; projNodes.forEach(n=>{nodeMap[n.id]=n;});
+  const dt=Math.min(ts-lastFrameTime,50);lastFrameTime=ts;
+  if(!dragging) autoRY+=.0022;
+  const ry=autoRY+rotY2,rx=rotX2;
+  ctx2.fillStyle='#060810';ctx2.fillRect(0,0,W,H);
+  PARTICLES.forEach(p=>{const r2=rot(p,rx,ry),p2=proj(r2);if(p2.scale<.5)return;const tw=.5+.5*Math.sin(p.tw+ts*.001);ctx2.beginPath();ctx2.arc(p2.x,p2.y,p.sz*p2.scale*.16,0,Math.PI*2);ctx2.fillStyle=`rgba(200,220,255,${p.br*tw*.55})`;ctx2.fill();});
+  RINGS.forEach(r=>drawRing(r,ry,rx));
+  const pn=getPN(ry,rx);const nm={}; pn.forEach(n=>{nm[n.id]=n;});
   // links
-  links.forEach(link=>{
-    link.energy=Math.max(0,link.energy-LINK_DECAY*(dt/16));
-    const na=nodeMap[link.a],nb=nodeMap[link.b];
-    if(!na||!nb)return;
-    const op=lerp(LINK_BASE_OPACITY,LINK_ACTIVE_OPACITY,link.energy);
-    const ww=lerp(LINK_MIN_WIDTH,LINK_MAX_WIDTH,link.energy);
-    const grad=ctx.createLinearGradient(na.px,na.py,nb.px,nb.py);
-    grad.addColorStop(0,`rgba(${hexToRgb(na.color)},${op})`);
-    grad.addColorStop(1,`rgba(${hexToRgb(nb.color)},${op})`);
-    ctx.beginPath();ctx.moveTo(na.px,na.py);ctx.lineTo(nb.px,nb.py);
-    ctx.strokeStyle=grad;ctx.lineWidth=ww;ctx.stroke();
-    if(link.pulse>=0&&link.pulse<=1){
-      link.pulse+=FLASH_PULSE_SPEED*(dt/16);
-      const t=link.dir===1?link.pulse:1-link.pulse;
-      const SEG=0.18,t0=Math.max(0,t-SEG),t1=Math.min(1,t+SEG);
+  links.forEach(lk=>{
+    lk.energy=Math.max(0,lk.energy-.016*(dt/16));
+    const na=nm[lk.a],nb=nm[lk.b]; if(!na||!nb) return;
+    const op=lerp(.04,.90,lk.energy),ww=lerp(.5,2.8,lk.energy);
+    const g=ctx2.createLinearGradient(na.px,na.py,nb.px,nb.py);
+    g.addColorStop(0,`rgba(${h2r(na.color)},${op})`);g.addColorStop(1,`rgba(${h2r(nb.color)},${op})`);
+    ctx2.beginPath();ctx2.moveTo(na.px,na.py);ctx2.lineTo(nb.px,nb.py);ctx2.strokeStyle=g;ctx2.lineWidth=ww;ctx2.stroke();
+    if(lk.pulse>=0&&lk.pulse<=1){
+      lk.pulse+=.20*(dt/16);
+      const t=lk.dir===1?lk.pulse:1-lk.pulse,SEG=.18;
+      const t0=Math.max(0,t-SEG),t1=Math.min(1,t+SEG);
       const px0=na.px+(nb.px-na.px)*t0,py0=na.py+(nb.py-na.py)*t0;
       const px1=na.px+(nb.px-na.px)*t1,py1=na.py+(nb.py-na.py)*t1;
       const pxM=na.px+(nb.px-na.px)*t,pyM=na.py+(nb.py-na.py)*t;
-      const tc=typeColor(link.type);
-      const gg=ctx.createLinearGradient(px0,py0,px1,py1);
-      gg.addColorStop(0,`rgba(${hexToRgb(tc)},0)`);
-      gg.addColorStop(.5,`rgba(${hexToRgb(tc)},${0.55+link.energy*0.35})`);
-      gg.addColorStop(1,`rgba(${hexToRgb(tc)},0)`);
-      ctx.beginPath();ctx.moveTo(px0,py0);ctx.lineTo(px1,py1);
-      ctx.strokeStyle=gg;ctx.lineWidth=ww+3;ctx.stroke();
-      ctx.beginPath();ctx.arc(pxM,pyM,2.2,0,Math.PI*2);
-      ctx.fillStyle=tc;ctx.shadowColor=tc;ctx.shadowBlur=12;ctx.fill();ctx.shadowBlur=0;
-      if(link.pulse>1)link.pulse=-1;
+      const tc=typeColor(lk.type);
+      const gg=ctx2.createLinearGradient(px0,py0,px1,py1);
+      gg.addColorStop(0,`rgba(${h2r(tc)},0)`);gg.addColorStop(.5,`rgba(${h2r(tc)},${.55+lk.energy*.35})`);gg.addColorStop(1,`rgba(${h2r(tc)},0)`);
+      ctx2.beginPath();ctx2.moveTo(px0,py0);ctx2.lineTo(px1,py1);ctx2.strokeStyle=gg;ctx2.lineWidth=ww+3;ctx2.stroke();
+      ctx2.beginPath();ctx2.arc(pxM,pyM,2.2,0,Math.PI*2);ctx2.fillStyle=tc;ctx2.shadowColor=tc;ctx2.shadowBlur=14;ctx2.fill();ctx2.shadowBlur=0;
+      if(lk.pulse>1) lk.pulse=-1;
     }
   });
   // nodes
-  projNodes.forEach(n=>{
-    const r=n.size*n.pscale*.28,isCP=n.id==='cp',isH=hoveredNode===n.id;
-    const grd=ctx.createRadialGradient(n.px,n.py,0,n.px,n.py,r*(isCP?4:3));
-    grd.addColorStop(0,n.color+'55');grd.addColorStop(1,'transparent');
-    ctx.beginPath();ctx.arc(n.px,n.py,r*(isCP?4:3),0,Math.PI*2);ctx.fillStyle=grd;ctx.fill();
-    ctx.beginPath();ctx.arc(n.px,n.py,r,0,Math.PI*2);ctx.fillStyle=n.color;
-    ctx.shadowColor=n.color;ctx.shadowBlur=isH?22:10;ctx.fill();ctx.shadowBlur=0;
-    if(isCP){[1.8,2.8].forEach(m=>{ctx.beginPath();ctx.arc(n.px,n.py,r*m,0,Math.PI*2);ctx.strokeStyle=n.color+(m===1.8?'44':'22');ctx.lineWidth=1;ctx.stroke();});}
-    if(n.pscale>.6){
-      ctx.fillStyle=isH?'#fff':n.color+'cc';
-      ctx.font=`${Math.max(9,10*n.pscale)}px 'Share Tech Mono',monospace`;
-      ctx.textAlign='center';
-      ctx.fillText(n.name,n.px,n.py-r-6);
-      if(isCP||isH){ctx.fillStyle='#ffffff44';ctx.font=`${Math.max(7,8*n.pscale)}px 'Share Tech Mono',monospace`;ctx.fillText(n.role,n.px,n.py-r-17);}
+  pn.forEach(n=>{
+    const r2=n.size*n.ps*.27,isCP=n.id==='cp',isSel=selectedNode===n.id,isHov=hoveredNode===n.id;
+    const g=ctx2.createRadialGradient(n.px,n.py,0,n.px,n.py,r2*(isCP?4:3));
+    g.addColorStop(0,n.color+'55');g.addColorStop(1,'transparent');
+    ctx2.beginPath();ctx2.arc(n.px,n.py,r2*(isCP?4:3),0,Math.PI*2);ctx2.fillStyle=g;ctx2.fill();
+    if(isSel){
+      ctx2.beginPath();ctx2.arc(n.px,n.py,r2+5,0,Math.PI*2);
+      ctx2.strokeStyle=n.color+'99';ctx2.lineWidth=1.5;ctx2.stroke();
+    }
+    ctx2.beginPath();ctx2.arc(n.px,n.py,r2,0,Math.PI*2);ctx2.fillStyle=n.color;
+    ctx2.shadowColor=n.color;ctx2.shadowBlur=isHov||isSel?26:10;ctx2.fill();ctx2.shadowBlur=0;
+    if(isCP){[1.8,2.8].forEach(m=>{ctx2.beginPath();ctx2.arc(n.px,n.py,r2*m,0,Math.PI*2);ctx2.strokeStyle=n.color+(m===1.8?'44':'22');ctx2.lineWidth=1;ctx2.stroke();});}
+    if(n.ps>.6){
+      ctx2.fillStyle=isHov||isSel?'#fff':n.color+'cc';
+      ctx2.font=`${Math.max(8,9*n.ps)}px 'Share Tech Mono',monospace`;ctx2.textAlign='center';
+      ctx2.fillText(n.name,n.px,n.py-r2-5);
+      if(isCP||isHov||isSel){ctx2.fillStyle='#ffffff44';ctx2.font=`${Math.max(6,7*n.ps)}px 'Share Tech Mono',monospace`;ctx2.fillText(n.role,n.px,n.py-r2-15);}
     }
   });
-  // demo fallback: se nessun evento live arriva entro 8s
-  if(Date.now()-lastEventTs > 8000){
+  // demo fallback
+  if(Date.now()-lastEventTs>8000){
     demoTimer+=dt;
-    if(demoTimer>=demoNextIn){const rt=demoRoute();fireLink(rt.from,rt.to,'task');demoTimer=0;demoNextIn=200+Math.random()*500;}
-    if(!document.getElementById('conn-label').textContent.includes('demo')){
-      setConn('demo');
-      addLog('No live events — demo mode active','warn');
-    }
-  } else {
-    demoTimer=0;
-  }
+    if(demoTimer>=demoNextIn){const rt=demoRoute();fireLink(rt.f,rt.t,'task');demoTimer=0;demoNextIn=200+Math.random()*500;}
+    if(!inDemoMode){inDemoMode=true;setConn('demo');addLog('No live events — demo mode','warn');}
+  } else {demoTimer=0;inDemoMode=false;}
   // HUD
   epsTimer+=dt;
   if(epsTimer>1000){eps=totalEvents-lastTotal;lastTotal=totalEvents;epsTimer=0;}
@@ -459,39 +688,123 @@ function draw(ts){
   document.getElementById('hdr-nodes').textContent=activeNodeCount||NODES.filter(n=>n.status==='active'&&n.id!=='cp'&&n.id!=='reg').length;
   document.getElementById('hdr-tps').textContent=eps;
   document.getElementById('hdr-mem').textContent=Math.round(memEntries);
-  document.getElementById('ft-uptime').textContent=`${hh}:${mm2}:${ss}`;
-  document.getElementById('ft-total').textContent=totalEvents.toLocaleString();
-  const mP=Math.round(memEntries/memMax*100);
-  document.getElementById('mem-pct').textContent=mP+'%';
-  document.getElementById('mem-bar').style.width=mP+'%';
-  const nP=Math.round(Math.min(activeNodeCount||1,10)/10*100);
-  document.getElementById('nodes-pct').textContent=nP+'%';
-  document.getElementById('nodes-bar').style.width=nP+'%';
+  document.getElementById('ft-up').textContent=`${hh}:${mm2}:${ss}`;
+  document.getElementById('ft-ev').textContent=totalEvents.toLocaleString();
 }
-// ── MOUSE ──────────────────────────────────────────────────────────────────────
-canvas.addEventListener('mousedown',e=>{isDragging=true;lastMX=e.clientX;lastMY=e.clientY;});
-window.addEventListener('mouseup',()=>isDragging=false);
+
+// ── SSE ───────────────────────────────────────────────────────────────────
+function setConn(mode){
+  const colors={live:'#22c55e',poll:'#f59e0b',demo:'#64748b',connecting:'#64748b'};
+  const labels={live:'SSE live ●',poll:'REST poll',demo:'demo mode',connecting:'connecting…'};
+  document.getElementById('cdot').style.background=colors[mode]||'#64748b';
+  document.getElementById('clabel').textContent=labels[mode]||mode;
+  document.getElementById('ft-mode').textContent=mode.toUpperCase();
+  if(mode==='live'||mode==='poll'){
+    document.getElementById('mesh-dot').className='sdot';
+    document.getElementById('mesh-status').textContent='ONLINE';
+  }
+}
+
+function connectSSE(){
+  setConn('connecting');
+  const es=new EventSource(`${BRIDGE}/events`);
+  es.addEventListener('connected',()=>{liveMode=true;setConn('live');addLog('Bridge connected','task');});
+  es.addEventListener('heartbeat',e=>{
+    try{
+      const d=JSON.parse(e.data);const nid=d.node_id||'';
+      let matched=NODES.find(n=>n.id===nid);
+      if(!matched) matched=NODES.find(n=>n.id!=='cp'&&n.id!=='reg'&&n.status!=='active');
+      if(matched){
+        matched.status='active';matched.ping=d.ping||matched.ping;
+        matched.model=d.model||matched.model;matched.lastSeen=d.last_seen||new Date().toISOString();
+        liveNodeMap[nid]=matched;
+        activeNodeCount=NODES.filter(n=>n.status==='active'&&n.id!=='cp'&&n.id!=='reg').length;
+        renderNodeList();
+        if(selectedNode===matched.id) renderNodeDetail(matched.id);
+        fireLink('cp',matched.id,'heartbeat');
+      }
+    }catch(_){}
+  });
+  es.addEventListener('task',e=>{
+    try{
+      const d=JSON.parse(e.data);fireLink(d.from,d.to,d.type||'task');
+      addLog(`${d.label||'task'}: ${d.from}→${d.to}`,d.type||'task');
+      // update node task counts
+      const tn=NODES.find(n=>n.id===resolveId(d.to)||n.name===d.to);
+      if(tn) tn.tasks_assigned++;
+      if(activeTab==='tasks') renderTaskQueue();
+    }catch(_){}
+  });
+  es.addEventListener('memory_sync',e=>{
+    try{
+      const d=JSON.parse(e.data);fireLink(d.from||'cp',d.to||'n4','memory');
+      addLog(`mem-sync: ${d.label||''}`, 'memory');
+      memEntries=d.entries||memEntries;
+    }catch(_){}
+  });
+  es.addEventListener('memory_stats',e=>{
+    try{
+      const d=JSON.parse(e.data);
+      memEntries=d.entries??memEntries;memMax=d.max_entries??memMax;
+      memFileSizeKb=d.file_size_kb??memFileSizeKb;memTTL=d.ttl_days??memTTL;
+    }catch(_){}
+  });
+  es.addEventListener('dream',e=>{
+    try{
+      const d=JSON.parse(e.data);
+      pushDream(d.node,d.label);
+      addLog(`✦ dream: ${d.label}`,'dream');
+      const pool=['n1','n2','n3','n4','n5'];
+      fireLink('cp',pool[Math.floor(Math.random()*pool.length)],'dream');
+    }catch(_){}
+  });
+  es.onerror=()=>{liveMode=false;setConn('poll');es.close();setTimeout(connectSSE,5000);};
+}
+
+// ── MOUSE ─────────────────────────────────────────────────────────────────
+canvas.addEventListener('mousedown',e=>{dragging=true;lmx=e.clientX;lmy=e.clientY;});
+window.addEventListener('mouseup',e=>{
+  if(!dragging) return;dragging=false;
+  // click detection: if mouse barely moved, treat as click
+  if(Math.abs(e.clientX-lmx)<5&&Math.abs(e.clientY-lmy)<5){
+    const ry=autoRY+rotY2,rx=rotX2,pn=getPN(ry,rx);
+    for(const n of pn.slice().reverse()){
+      const r2=n.size*n.ps*.27,dx=e.clientX-n.px,dy=e.clientY-n.py;
+      if(Math.sqrt(dx*dx+dy*dy)<r2*3.5){selectNode(n.id);break;}
+    }
+  }
+});
 window.addEventListener('mousemove',e=>{
-  if(isDragging){rotY+=(e.clientX-lastMX)*.005;rotX+=(e.clientY-lastMY)*.005;lastMX=e.clientX;lastMY=e.clientY;}
-  const ry=autoRotY+rotY,rx=rotX,pn=getPN(ry,rx);
+  if(dragging){rotY2+=(e.clientX-lmx)*.005;rotX2+=(e.clientY-lmy)*.005;lmx=e.clientX;lmy=e.clientY;}
+  const ry=autoRY+rotY2,rx=rotX2,pn=getPN(ry,rx);
   const tt=document.getElementById('tooltip');
   let found=null;
-  for(const n of pn){const r=n.size*n.pscale*.28,dx=e.clientX-n.px,dy=e.clientY-n.py;if(Math.sqrt(dx*dx+dy*dy)<r*3){found=n;break;}}
+  for(const n of pn.slice().reverse()){
+    const r2=n.size*n.ps*.27,dx=e.clientX-n.px,dy=e.clientY-n.py;
+    if(Math.sqrt(dx*dx+dy*dy)<r2*3){found=n;break;}
+  }
   if(found){
-    hoveredNode=found.id;tt.classList.add('visible');
-    tt.style.left=(e.clientX+16)+'px';tt.style.top=(e.clientY-40)+'px';
+    hoveredNode=found.id;tt.classList.add('v');
+    tt.style.left=(e.clientX+14)+'px';tt.style.top=(e.clientY-36)+'px';
     document.getElementById('tt-name').textContent=found.name;
     document.getElementById('tt-role').textContent=found.role;
     document.getElementById('tt-model').textContent=found.model;
-    document.getElementById('tt-status').textContent=found.status||'unknown';
+    document.getElementById('tt-status').textContent=found.status||'?';
     document.getElementById('tt-ping').textContent=found.ping+'ms';
-    document.getElementById('tt-seen').textContent=found.lastSeen?new Date(found.lastSeen).toLocaleTimeString('it-IT'):'—';
-  }else{hoveredNode=null;tt.classList.remove('visible');}
+    canvas.style.cursor='pointer';
+  } else {hoveredNode=null;tt.classList.remove('v');canvas.style.cursor='default';}
 });
-// intercept fireLink to update lastEventTs
-const _origFireLink=fireLink;
-window.fireLink=function(f,t,tp){lastEventTs=Date.now();_origFireLink(f,t,tp);};
-// ── BOOT ─────────────────────────────────────────────────────────────────────
+
+// ── KEYBOARD ──────────────────────────────────────────────────────────────
+window.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){closeModal();if(sidebarOpen)toggleSidebar();}
+  if(e.key==='t'||e.key==='T'){if(!sidebarOpen)toggleSidebar();switchTab('tasks');}
+  if(e.key==='d'||e.key==='D'){if(!sidebarOpen)toggleSidebar();switchTab('dreams');}
+  if(e.key==='m'||e.key==='M'){if(!sidebarOpen)toggleSidebar();switchTab('memory');}
+  if(e.key==='c'||e.key==='C'){if(!sidebarOpen)toggleSidebar();switchTab('chat');}
+});
+
+// ── BOOT ──────────────────────────────────────────────────────────────────
 connectSSE();
 requestAnimationFrame(draw);
 </script>
