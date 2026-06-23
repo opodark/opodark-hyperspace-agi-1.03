@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HyperSpace-AGI — Live Mesh Dashboard</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --font-display:'Orbitron',monospace;
+    --font-body:'Share Tech Mono',monospace;
+    --color-bg:#060810;
+    --color-primary:#00f5ff;
+    --color-accent:#a855f7;
+    --color-success:#22c55e;
+    --color-warning:#f59e0b;
+    --color-danger:#ef4444;
+    --color-text:#e2e8f0;
+    --color-muted:#64748b;
+  }
+  html,body{width:100%;height:100%;overflow:hidden;background:var(--color-bg);color:var(--color-text);font-family:var(--font-body)}
+  canvas{display:block;position:fixed;inset:0;z-index:0}
+  header{position:fixed;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;justify-content:space-between;padding:14px 24px;background:linear-gradient(180deg,rgba(6,8,16,.95) 0%,transparent 100%);border-bottom:1px solid rgba(0,245,255,.08)}
+  .logo{display:flex;align-items:center;gap:10px}
+  .logo svg{width:28px;height:28px}
+  .logo-text{font-family:var(--font-display);font-size:.85rem;letter-spacing:.15em;color:var(--color-primary);text-shadow:0 0 12px rgba(0,245,255,.6)}
+  .logo-sub{font-size:.6rem;color:var(--color-muted);letter-spacing:.1em;margin-top:2px}
+  .hud-status{display:flex;gap:20px;align-items:center}
+  .status-dot{width:7px;height:7px;border-radius:50%;background:var(--color-success);box-shadow:0 0 6px var(--color-success);animation:pulse-dot 2s infinite}
+  .status-dot.warn{background:var(--color-warning);box-shadow:0 0 6px var(--color-warning)}
+  .status-dot.err{background:var(--color-danger);box-shadow:0 0 6px var(--color-danger);animation:none}
+  @keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.4}}
+  .status-label{font-size:.65rem;color:var(--color-muted);letter-spacing:.08em;text-transform:uppercase}
+  .status-val{font-size:.75rem;color:var(--color-primary);font-family:var(--font-display)}
+  .panel{position:fixed;z-index:10;background:rgba(6,8,16,.82);border:1px solid rgba(0,245,255,.12);backdrop-filter:blur(12px);border-radius:8px;padding:16px;min-width:200px}
+  .panel-title{font-family:var(--font-display);font-size:.62rem;letter-spacing:.15em;color:var(--color-primary);text-transform:uppercase;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid rgba(0,245,255,.1)}
+  .panel-left{left:20px;top:50%;transform:translateY(-50%)}
+  .panel-right{right:20px;top:50%;transform:translateY(-50%)}
+  .node-item{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.04)}
+  .node-item:last-child{border-bottom:none}
+  .node-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+  .node-name{font-size:.7rem;color:var(--color-text);letter-spacing:.05em}
+  .node-role{font-size:.58rem;color:var(--color-muted);margin-top:1px}
+  .node-ping{font-size:.58rem;margin-left:auto;font-family:var(--font-display)}
+  .node-status-badge{font-size:.55rem;padding:1px 5px;border-radius:3px;margin-left:4px;font-family:var(--font-display)}
+  .badge-ok{background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.3)}
+  .badge-warn{background:rgba(245,158,11,.15);color:#f59e0b;border:1px solid rgba(245,158,11,.3)}
+  .badge-off{background:rgba(100,116,139,.15);color:#64748b;border:1px solid rgba(100,116,139,.3)}
+  .stat-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04)}
+  .stat-row:last-child{border-bottom:none}
+  .stat-key{font-size:.62rem;color:var(--color-muted);letter-spacing:.06em}
+  .stat-val{font-size:.7rem;font-family:var(--font-display);color:var(--color-primary)}
+  .gauge-wrap{margin-top:8px}
+  .gauge-label{display:flex;justify-content:space-between;font-size:.58rem;color:var(--color-muted);margin-bottom:4px}
+  .gauge-track{height:3px;background:rgba(255,255,255,.06);border-radius:2px;overflow:hidden}
+  .gauge-fill{height:100%;border-radius:2px;transition:width .8s ease}
+  footer{position:fixed;bottom:0;left:0;right:0;z-index:10;display:flex;align-items:center;justify-content:space-between;padding:10px 24px;background:linear-gradient(0deg,rgba(6,8,16,.95) 0%,transparent 100%);border-top:1px solid rgba(0,245,255,.06)}
+  .footer-item{display:flex;flex-direction:column;align-items:center;gap:2px}
+  .footer-key{font-size:.55rem;color:var(--color-muted);text-transform:uppercase;letter-spacing:.08em}
+  .footer-val{font-size:.75rem;font-family:var(--font-display);color:var(--color-text)}
+  .footer-divider{width:1px;height:28px;background:rgba(0,245,255,.1)}
+  .tooltip{position:fixed;z-index:20;pointer-events:none;background:rgba(6,8,16,.95);border:1px solid rgba(0,245,255,.25);border-radius:6px;padding:10px 14px;font-size:.68rem;min-width:160px;display:none}
+  .tooltip.visible{display:block}
+  .tooltip-name{font-family:var(--font-display);font-size:.72rem;color:var(--color-primary);margin-bottom:6px}
+  .tooltip-row{display:flex;justify-content:space-between;gap:20px;padding:2px 0;color:var(--color-muted)}
+  .tooltip-row span:last-child{color:var(--color-text)}
+  .center-hud{position:fixed;z-index:5;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none}
+  .center-label{font-family:var(--font-display);font-size:.6rem;letter-spacing:.2em;color:rgba(0,245,255,.2);text-transform:uppercase}
+  /* connection indicator */
+  #conn-indicator{position:fixed;bottom:52px;right:24px;z-index:20;font-size:.6rem;font-family:var(--font-display);display:flex;align-items:center;gap:6px;opacity:.7}
+  #conn-dot{width:6px;height:6px;border-radius:50%;background:var(--color-muted)}
+  /* log panel */
+  #log-panel{position:fixed;bottom:52px;left:50%;transform:translateX(-50%);z-index:10;background:rgba(6,8,16,.85);border:1px solid rgba(0,245,255,.08);border-radius:6px;padding:8px 14px;width:420px;max-height:90px;overflow:hidden;backdrop-filter:blur(8px)}
+  #log-list{list-style:none;display:flex;flex-direction:column-reverse;gap:2px}
+  .log-entry{font-size:.6rem;color:var(--color-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;animation:fadeIn .3s forwards}
+  .log-entry.task{color:var(--color-primary)}
+  .log-entry.memory{color:var(--color-success)}
+  .log-entry.warn{color:var(--color-warning)}
+  @keyframes fadeIn{to{opacity:1}}
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<header>
+  <div class="logo">
+    <svg viewBox="0 0 28 28" fill="none">
+      <circle cx="14" cy="14" r="13" stroke="#00f5ff" stroke-width="1" opacity=".4"/>
+      <circle cx="14" cy="14" r="8" stroke="#00f5ff" stroke-width="1"/>
+      <circle cx="14" cy="14" r="3" fill="#00f5ff" opacity=".8"/>
+      <line x1="14" y1="1" x2="14" y2="27" stroke="#00f5ff" stroke-width=".5" opacity=".3"/>
+      <line x1="1" y1="14" x2="27" y2="14" stroke="#00f5ff" stroke-width=".5" opacity=".3"/>
+      <ellipse cx="14" cy="14" rx="13" ry="5" stroke="#a855f7" stroke-width=".8" opacity=".5"/>
+    </svg>
+    <div>
+      <div class="logo-text">HYPERSPACE·AGI</div>
+      <div class="logo-sub">DISTRIBUTED AGENT MESH v1.02</div>
+    </div>
+  </div>
+  <div class="hud-status">
+    <div style="display:flex;align-items:center;gap:6px">
+      <div class="status-dot" id="mesh-dot"></div>
+      <div><div class="status-label">Mesh Status</div><div class="status-val" id="mesh-status">CONNECTING…</div></div>
+    </div>
+    <div style="width:1px;height:28px;background:rgba(0,245,255,.1)"></div>
+    <div><div class="status-label">Active Nodes</div><div class="status-val" id="hdr-nodes">—</div></div>
+    <div style="width:1px;height:28px;background:rgba(0,245,255,.1)"></div>
+    <div><div class="status-label">Tasks/s</div><div class="status-val" id="hdr-tps">—</div></div>
+    <div style="width:1px;height:28px;background:rgba(0,245,255,.1)"></div>
+    <div><div class="status-label">Memory Entries</div><div class="status-val" id="hdr-mem">—</div></div>
+    <div style="width:1px;height:28px;background:rgba(0,245,255,.1)"></div>
+    <div><div class="status-label">File Size</div><div class="status-val" id="hdr-fsize">—</div></div>
+  </div>
+</header>
+
+<div class="panel panel-left">
+  <div class="panel-title">Mesh Nodes</div>
+  <div id="node-list"></div>
+</div>
+
+<div class="panel panel-right">
+  <div class="panel-title">Control Plane</div>
+  <div class="stat-row"><span class="stat-key">TTL Days</span><span class="stat-val" id="cp-ttl">—</span></div>
+  <div class="stat-row"><span class="stat-key">Max Entries</span><span class="stat-val" id="cp-max">—</span></div>
+  <div class="stat-row"><span class="stat-key">Compress</span><span class="stat-val">gzip</span></div>
+  <div class="stat-row"><span class="stat-key">Transport</span><span class="stat-val">REST/ngrok</span></div>
+  <div class="stat-row"><span class="stat-key">Registry</span><span class="stat-val">:8086</span></div>
+  <div class="stat-row"><span class="stat-key">CP Port</span><span class="stat-val">:8000</span></div>
+  <div class="gauge-wrap">
+    <div class="gauge-label"><span>Memory usage</span><span id="mem-pct">0%</span></div>
+    <div class="gauge-track"><div class="gauge-fill" id="mem-bar" style="width:0%;background:var(--color-primary)"></div></div>
+  </div>
+  <div class="gauge-wrap" style="margin-top:10px">
+    <div class="gauge-label"><span>Active nodes</span><span id="nodes-pct">0%</span></div>
+    <div class="gauge-track"><div class="gauge-fill" id="nodes-bar" style="width:0%;background:var(--color-accent)"></div></div>
+  </div>
+</div>
+
+<div class="center-hud"><div class="center-label">control plane</div></div>
+
+<div class="tooltip" id="tooltip">
+  <div class="tooltip-name" id="tt-name"></div>
+  <div class="tooltip-row"><span>Role</span><span id="tt-role"></span></div>
+  <div class="tooltip-row"><span>Model</span><span id="tt-model"></span></div>
+  <div class="tooltip-row"><span>Status</span><span id="tt-status"></span></div>
+  <div class="tooltip-row"><span>Ping</span><span id="tt-ping"></span></div>
+  <div class="tooltip-row"><span>Last seen</span><span id="tt-seen"></span></div>
+</div>
+
+<div id="log-panel">
+  <ul id="log-list"></ul>
+</div>
+
+<div id="conn-indicator">
+  <div id="conn-dot"></div>
+  <span id="conn-label">bridge offline</span>
+</div>
+
+<footer>
+  <div class="footer-item"><div class="footer-key">Uptime</div><div class="footer-val" id="ft-uptime">00:00:00</div></div>
+  <div class="footer-divider"></div>
+  <div class="footer-item"><div class="footer-key">Total Tasks</div><div class="footer-val" id="ft-total">0</div></div>
+  <div class="footer-divider"></div>
+  <div class="footer-item"><div class="footer-key">Mesh Latency</div><div class="footer-val" id="ft-latency">— ms</div></div>
+  <div class="footer-divider"></div>
+  <div class="footer-item"><div class="footer-key">Registry</div><div class="footer-val">:8086</div></div>
+  <div class="footer-divider"></div>
+  <div class="footer-item"><div class="footer-key">Control Plane</div><div class="footer-val">:8000</div></div>
+  <div class="footer-divider"></div>
+  <div class="footer-item"><div class="footer-key">Framework</div><div class="footer-val">HyperSpace v1.02</div></div>
+</footer>
+
+<script>
+// ─── CONFIG ──────────────────────────────────────────────────────────────────
+// SSE bridge runs on :8099 (infra-ui/server.py)
+// Falls back to demo mode if bridge is unreachable
+const BRIDGE_URL      = 'http://localhost:8099';
+const SSE_ENDPOINT    = `${BRIDGE_URL}/events`;
+const POLL_INTERVAL   = 5000;   // ms between REST polls
+const DEMO_MODE_DELAY = 3000;   // ms to wait before fallback to demo
+
+// ─── LINK CONFIG ─────────────────────────────────────────────────────────────
+const LINK_BASE_OPACITY   = 0.04;
+const LINK_ACTIVE_OPACITY = 0.90;
+const LINK_DECAY          = 0.018;
+const LINK_MIN_WIDTH      = 0.5;
+const LINK_MAX_WIDTH      = 2.8;
+const FLASH_PULSE_SPEED   = 0.22;
+
+// ─── NODE REGISTRY ───────────────────────────────────────────────────────────
+// Populated from /nodes/active; fallback static set used in demo mode
+const DEFAULT_NODES = [
+  {id:'cp',  name:'Control Plane', role:'Orchestrator',     model:'—',            color:'#00f5ff', size:18, ping:2,  lastSeen:null},
+  {id:'n1',  name:'node-1',        role:'Executor',         model:'phi3:mini',    color:'#a855f7', size:11, ping:12, lastSeen:null},
+  {id:'n2',  name:'node-2',        role:'Executor',         model:'llama3:8b',    color:'#a855f7', size:11, ping:18, lastSeen:null},
+  {id:'n3',  name:'node-3',        role:'Planner',          model:'mistral:7b',   color:'#ff6b35', size:12, ping:9,  lastSeen:null},
+  {id:'n4',  name:'node-4',        role:'Memory',           model:'qwen:4b',      color:'#22c55e', size:10, ping:24, lastSeen:null},
+  {id:'n5',  name:'node-5',        role:'Executor',         model:'phi3:mini',    color:'#a855f7', size:10, ping:31, lastSeen:null},
+  {id:'n6',  name:'remote-A',      role:'Remote Peer',      model:'llama3:8b-q4', color:'#f59e0b', size:9,  ping:67, lastSeen:null},
+  {id:'reg', name:'Registry',      role:'Service Discovery',model:'—',            color:'#64748b', size:8,  ping:1,  lastSeen:null},
+];
+
+let NODES = JSON.parse(JSON.stringify(DEFAULT_NODES));
+
+const LINK_DEFS = [
+  ['cp','n1'],['cp','n2'],['cp','n3'],['cp','n4'],['cp','n5'],
+  ['n3','n1'],['n3','n2'],['n4','n1'],['n4','n2'],
+  ['n1','n5'],['cp','n6'],['cp','reg'],['n3','n6'],
+];
+
+const links = LINK_DEFS.map(([a,b])=>({a,b,energy:0,pulse:-1,dir:1,totalTasks:0}));
+const linkMap={};
+links.forEach(l=>{linkMap[l.a+'|'+l.b]=l;linkMap[l.b+'|'+l.a]=l;});
+
+function fireLink(fromId,toId,type='task'){
+  const l=linkMap[fromId+'|'+toId];
+  if(!l)return;
+  l.energy=1.0;
+  l.pulse=0;
+  l.dir=(l.a===fromId)?1:-1;
+  l.type=type;  // 'task' | 'memory' | 'heartbeat'
+  l.totalTasks++;
+  totalTasks++;
+}
+
+// ─── CANVAS ───────────────────────────────────────────────────────────────────
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+let W,H,cx,cy;
+function resize(){W=canvas.width=window.innerWidth;H=canvas.height=window.innerHeight;cx=W/2;cy=H/2;}
+resize(); window.addEventListener('resize',resize);
+
+// ─── 3D ───────────────────────────────────────────────────────────────────────
+const SPHERE_R=()=>Math.min(W,H)*0.28;
+function spherePos(i,total,r){const phi=Math.acos(1-2*(i+.5)/total),theta=Math.PI*(1+Math.sqrt(5))*i;return{x:r*Math.sin(phi)*Math.cos(theta),y:r*Math.sin(phi)*Math.sin(theta),z:r*Math.cos(phi)};}
+let nodePositions={};
+function buildPositions(){
+  const r=SPHERE_R(); nodePositions['cp']={x:0,y:0,z:0};
+  const peri=NODES.filter(n=>n.id!=='cp');
+  peri.forEach((n,i)=>{nodePositions[n.id]=spherePos(i,peri.length,r);});
+}
+buildPositions(); window.addEventListener('resize',buildPositions);
+let rotX=0.15,rotY=0,autoRotY=0;
+let isDragging=false,lastMX=0,lastMY=0;
+function rotatePoint(p,rx,ry){let x1=p.x*Math.cos(ry)+p.z*Math.sin(ry),z1=-p.x*Math.sin(ry)+p.z*Math.cos(ry),y2=p.y*Math.cos(rx)-z1*Math.sin(rx),z2=p.y*Math.sin(rx)+z1*Math.cos(rx);return{x:x1,y:y2,z:z2};}
+function project(p){const fov=900,z=p.z+fov,s=fov/z;return{x:cx+p.x*s,y:cy+p.y*s,scale:s};}
+function getProjectedNodes(ry,rx){return NODES.map(n=>{const rot=rotatePoint(nodePositions[n.id]||{x:0,y:0,z:0},rx,ry),proj=project(rot);return{...n,px:proj.x,py:proj.y,pscale:proj.scale,pz:rot.z};}).sort((a,b)=>a.pz-b.pz);}
+
+// ─── PARTICLES ────────────────────────────────────────────────────────────────
+const particles=[];
+for(let i=0;i<120;i++){const phi=Math.random()*Math.PI*2,theta=Math.random()*Math.PI*2,r=SPHERE_R()*(0.9+Math.random()*0.4);particles.push({x:r*Math.sin(theta)*Math.cos(phi),y:r*Math.sin(theta)*Math.sin(phi),z:r*Math.cos(theta),size:Math.random()*1.5+.3,brightness:Math.random(),tw:Math.random()*Math.PI*2});}
+
+// ─── ORBIT RINGS ─────────────────────────────────────────────────────────────
+const rings=[{rx:0,ry:0,rf:1.15,color:'#00f5ff',opacity:.07},{rx:Math.PI/2,ry:.3,rf:1.05,color:'#a855f7',opacity:.05},{rx:.4,ry:Math.PI/3,rf:.9,color:'#ff6b35',opacity:.04}];
+function drawRing(ring,ry,rx){const r=SPHERE_R()*ring.rf,steps=120;ctx.beginPath();for(let i=0;i<=steps;i++){const a=(i/steps)*Math.PI*2,p={x:r*Math.cos(a),y:r*Math.sin(a)*Math.cos(ring.rx),z:r*Math.sin(a)*Math.sin(ring.rx)},pr=rotatePoint(p,rx,ry+ring.ry),pp=project(pr);i===0?ctx.moveTo(pp.x,pp.y):ctx.lineTo(pp.x,pp.y);}ctx.closePath();ctx.strokeStyle=ring.color;ctx.globalAlpha=ring.opacity;ctx.lineWidth=1;ctx.stroke();ctx.globalAlpha=1;}
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+function lerp(a,b,t){return a+(b-a)*t;}
+function hexToRgb(h){const r=parseInt(h.slice(1,3),16),g=parseInt(h.slice(3,5),16),b=parseInt(h.slice(5,7),16);return`${r},${g},${b}`;}
+function typeColor(type){return type==='memory'?'#22c55e':type==='heartbeat'?'#64748b':'#00f5ff';}
+
+// ─── LOG PANEL ────────────────────────────────────────────────────────────────
+const logList=document.getElementById('log-list');
+const LOG_MAX=5;
+function addLog(msg,type='task'){
+  const li=document.createElement('li');
+  li.className=`log-entry ${type}`;
+  li.textContent=`[${new Date().toLocaleTimeString()}] ${msg}`;
+  logList.prepend(li);
+  while(logList.children.length>LOG_MAX) logList.removeChild(logList.lastChild);
+}
+
+// ─── STATE ────────────────────────────────────────────────────────────────────
+let totalTasks=0,lastTotal=0,tps=0,tpsTimer=0;
+let memEntries=0,memMax=200,memFileSizeKb=0,memTTL=7;
+let startTime=Date.now();
+let hoveredNode=null;
+let lastFrameTime=performance.now();
+let liveMode=false;  // true once SSE or REST connected
+let activeNodeCount=0;
+
+// demo mode scheduler
+const DEMO_ROUTES=[
+  {from:'cp',to:'n3',weight:3},{from:'n3',to:'n1',weight:4},{from:'n3',to:'n2',weight:3},
+  {from:'cp',to:'n4',weight:2},{from:'n4',to:'n1',weight:2},{from:'n4',to:'n2',weight:2},
+  {from:'n1',to:'cp',weight:2},{from:'n2',to:'cp',weight:2},
+  {from:'cp',to:'n5',weight:1},{from:'n1',to:'n5',weight:1},
+  {from:'cp',to:'n6',weight:1},{from:'n3',to:'n6',weight:1},{from:'cp',to:'reg',weight:1},
+];
+const demoTW=DEMO_ROUTES.reduce((s,r)=>s+r.weight,0);
+function demoRoute(){let r=Math.random()*demoTW,acc=0;for(const rt of DEMO_ROUTES){acc+=rt.weight;if(r<acc)return rt;}return DEMO_ROUTES[0];}
+let demoTimer=0,demoNextIn=300;
+
+// ─── LIVE DATA: SSE ───────────────────────────────────────────────────────────
+function connectSSE(){
+  try{
+    const es=new EventSource(SSE_ENDPOINT);
+    es.onopen=()=>{
+      setConn('live','#22c55e');
+      liveMode=true;
+      document.getElementById('mesh-dot').className='status-dot';
+      document.getElementById('mesh-status').textContent='ONLINE';
+      addLog('SSE bridge connected','task');
+    };
+    // task event: {"from":"cp","to":"n3","type":"task","label":"Plan: summarize doc"}
+    es.addEventListener('task',(e)=>{
+      try{
+        const d=JSON.parse(e.data);
+        fireLink(d.from,d.to,d.type||'task');
+        addLog(`${d.label||'task'} ${d.from}→${d.to}`,d.type||'task');
+      }catch(_){}
+    });
+    // memory_sync event: {"from":"cp","to":"n4","entries":143}
+    es.addEventListener('memory_sync',(e)=>{
+      try{
+        const d=JSON.parse(e.data);
+        fireLink(d.from,d.to,'memory');
+        addLog(`memory sync ${d.from}→${d.to} (${d.entries} entries)`,'memory');
+      }catch(_){}
+    });
+    // heartbeat event: {"node_id":"n1"}
+    es.addEventListener('heartbeat',(e)=>{
+      try{
+        const d=JSON.parse(e.data);
+        fireLink('cp',d.node_id,'heartbeat');
+      }catch(_){}
+    });
+    es.onerror=()=>{ setConn('poll','#f59e0b'); es.close(); startPolling(); };
+  }catch(err){ startPolling(); }
+}
+
+// ─── LIVE DATA: REST POLLING fallback ────────────────────────────────────────
+let pollHandle=null;
+async function pollOnce(){
+  try{
+    // memory stats
+    const ms=await fetch(`${BRIDGE_URL}/proxy/memory/stats`,{signal:AbortSignal.timeout(3000)}).then(r=>r.json());
+    memEntries  = ms.entries   ?? memEntries;
+    memMax      = ms.max_entries ?? memMax;
+    memFileSizeKb = ms.file_size_kb ?? memFileSizeKb;
+    memTTL      = ms.ttl_days  ?? memTTL;
+    document.getElementById('cp-ttl').textContent = memTTL;
+    document.getElementById('cp-max').textContent = memMax;
+    document.getElementById('hdr-fsize').textContent = memFileSizeKb.toFixed(1)+' KB';
+    liveMode=true;
+    setConn('poll','#f59e0b');
+  }catch(_){}
+  try{
+    // active nodes
+    const an=await fetch(`${BRIDGE_URL}/proxy/nodes/active`,{signal:AbortSignal.timeout(3000)}).then(r=>r.json());
+    activeNodeCount = Array.isArray(an) ? an.length : (an.nodes?.length ?? activeNodeCount);
+    // update node list colors/status from live data
+    if(Array.isArray(an)){
+      an.forEach(live=>{
+        const n=NODES.find(x=>x.id===live.node_id||x.name===live.node_id);
+        if(n){n.ping=live.ping??n.ping; n.lastSeen=live.last_seen??null;}
+      });
+    }
+    renderNodeList();
+  }catch(_){}
+}
+function startPolling(){
+  if(pollHandle) return;
+  pollOnce();
+  pollHandle=setInterval(pollOnce,POLL_INTERVAL);
+}
+
+function setConn(label,color){
+  document.getElementById('conn-dot').style.background=color;
+  document.getElementById('conn-label').textContent=label==='live'?'SSE live':label==='poll'?'REST poll':'bridge offline';
+}
+
+// ─── NODE LIST HTML ───────────────────────────────────────────────────────────
+function renderNodeList(){
+  const list=document.getElementById('node-list');
+  list.innerHTML='';
+  NODES.forEach(n=>{
+    const isActive = n.id==='cp'||n.id==='reg'|| (activeNodeCount>0 ? true : true);
+    const div=document.createElement('div');
+    div.className='node-item';
+    const seen=n.lastSeen ? new Date(n.lastSeen).toLocaleTimeString() : '—';
+    div.innerHTML=`
+      <div class="node-dot" style="background:${n.color};box-shadow:0 0 5px ${n.color}"></div>
+      <div><div class="node-name">${n.name}</div><div class="node-role">${n.role}</div></div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+        <span class="node-ping" style="color:${n.ping<20?'#22c55e':n.ping<50?'#f59e0b':'#ef4444'}">${n.ping}ms</span>
+        <span class="node-status-badge ${isActive?'badge-ok':'badge-off'}">${isActive?'LIVE':'IDLE'}</span>
+      </div>`;
+    list.appendChild(div);
+  });
+}
+renderNodeList();
+
+// ─── MAIN DRAW LOOP ───────────────────────────────────────────────────────────
+function draw(ts){
+  requestAnimationFrame(draw);
+  const dt=Math.min(ts-lastFrameTime,50);
+  lastFrameTime=ts;
+
+  if(!isDragging) autoRotY+=.0025;
+  const ry=autoRotY+rotY,rx=rotX;
+
+  ctx.fillStyle='#060810';
+  ctx.fillRect(0,0,W,H);
+
+  particles.forEach(p=>{
+    const rot=rotatePoint(p,rx,ry),proj=project(rot);
+    if(proj.scale<.5)return;
+    const tw=.5+.5*Math.sin(p.tw+ts*.001);
+    ctx.beginPath();ctx.arc(proj.x,proj.y,p.size*proj.scale*.18,0,Math.PI*2);
+    ctx.fillStyle=`rgba(200,220,255,${p.brightness*tw*.6})`;ctx.fill();
+  });
+
+  rings.forEach(r=>drawRing(r,ry,rx));
+
+  const projNodes=getProjectedNodes(ry,rx);
+  const nodeMap={}; projNodes.forEach(n=>{nodeMap[n.id]=n;});
+
+  // ── links ─────────────────────────────────────────────────────────────────
+  links.forEach(link=>{
+    link.energy=Math.max(0,link.energy-LINK_DECAY*(dt/16));
+    const na=nodeMap[link.a],nb=nodeMap[link.b];
+    if(!na||!nb)return;
+    const opacity=lerp(LINK_BASE_OPACITY,LINK_ACTIVE_OPACITY,link.energy);
+    const width=lerp(LINK_MIN_WIDTH,LINK_MAX_WIDTH,link.energy);
+    const tc=typeColor(link.type);
+    const grad=ctx.createLinearGradient(na.px,na.py,nb.px,nb.py);
+    grad.addColorStop(0,`rgba(${hexToRgb(na.color)},${opacity})`);
+    grad.addColorStop(1,`rgba(${hexToRgb(nb.color)},${opacity})`);
+    ctx.beginPath();ctx.moveTo(na.px,na.py);ctx.lineTo(nb.px,nb.py);
+    ctx.strokeStyle=grad;ctx.lineWidth=width;ctx.stroke();
+
+    if(link.pulse>=0&&link.pulse<=1){
+      link.pulse+=FLASH_PULSE_SPEED*(dt/16);
+      const t=link.dir===1?link.pulse:1-link.pulse;
+      const SEG=0.18;
+      const t0=Math.max(0,t-SEG),t1=Math.min(1,t+SEG);
+      const px0=na.px+(nb.px-na.px)*t0,py0=na.py+(nb.py-na.py)*t0;
+      const px1=na.px+(nb.px-na.px)*t1,py1=na.py+(nb.py-na.py)*t1;
+      const pxM=na.px+(nb.px-na.px)*t,pyM=na.py+(nb.py-na.py)*t;
+      const gg=ctx.createLinearGradient(px0,py0,px1,py1);
+      gg.addColorStop(0,`rgba(${hexToRgb(tc)},0)`);
+      gg.addColorStop(.5,`rgba(${hexToRgb(tc)},${0.55+link.energy*0.35})`);
+      gg.addColorStop(1,`rgba(${hexToRgb(tc)},0)`);
+      ctx.beginPath();ctx.moveTo(px0,py0);ctx.lineTo(px1,py1);
+      ctx.strokeStyle=gg;ctx.lineWidth=width+3;ctx.stroke();
+      ctx.beginPath();ctx.arc(pxM,pyM,2.2,0,Math.PI*2);
+      ctx.fillStyle=tc;ctx.shadowColor=tc;ctx.shadowBlur=12;ctx.fill();ctx.shadowBlur=0;
+      if(link.pulse>1)link.pulse=-1;
+    }
+  });
+
+  // ── nodes ─────────────────────────────────────────────────────────────────
+  projNodes.forEach(n=>{
+    const r=n.size*n.pscale*.28,isCP=n.id==='cp',isH=hoveredNode===n.id;
+    const grd=ctx.createRadialGradient(n.px,n.py,0,n.px,n.py,r*(isCP?4:3));
+    grd.addColorStop(0,n.color+'55');grd.addColorStop(1,'transparent');
+    ctx.beginPath();ctx.arc(n.px,n.py,r*(isCP?4:3),0,Math.PI*2);ctx.fillStyle=grd;ctx.fill();
+    ctx.beginPath();ctx.arc(n.px,n.py,r,0,Math.PI*2);ctx.fillStyle=n.color;
+    ctx.shadowColor=n.color;ctx.shadowBlur=isH?22:10;ctx.fill();ctx.shadowBlur=0;
+    if(isCP){[1.8,2.8].forEach(m=>{ctx.beginPath();ctx.arc(n.px,n.py,r*m,0,Math.PI*2);ctx.strokeStyle=n.color+(m===1.8?'44':'22');ctx.lineWidth=1;ctx.stroke();});}
+    if(n.pscale>.6){
+      ctx.fillStyle=isH?'#fff':n.color+'cc';
+      ctx.font=`${Math.max(9,10*n.pscale)}px 'Share Tech Mono',monospace`;
+      ctx.textAlign='center';
+      ctx.fillText(n.name,n.px,n.py-r-6);
+      if(isCP||isH){ctx.fillStyle='#ffffff44';ctx.font=`${Math.max(7,8*n.pscale)}px 'Share Tech Mono',monospace`;ctx.fillText(n.role,n.px,n.py-r-17);}
+    }
+  });
+
+  // ── demo fallback ─────────────────────────────────────────────────────────
+  if(!liveMode){
+    demoTimer+=dt;
+    if(demoTimer>=demoNextIn){const rt=demoRoute();fireLink(rt.from,rt.to,'task');demoTimer=0;demoNextIn=200+Math.random()*500;}
+  }
+
+  // ── HUD ───────────────────────────────────────────────────────────────────
+  tpsTimer+=dt;
+  if(tpsTimer>1000){tps=totalTasks-lastTotal;lastTotal=totalTasks;tpsTimer=0;}
+  const el=Math.floor((Date.now()-startTime)/1000);
+  const hh=String(Math.floor(el/3600)).padStart(2,'0'),mm=String(Math.floor((el%3600)/60)).padStart(2,'0'),ss=String(el%60).padStart(2,'0');
+  document.getElementById('hdr-nodes').textContent=activeNodeCount||NODES.filter(n=>n.id!=='cp'&&n.id!=='reg').length;
+  document.getElementById('hdr-tps').textContent=tps;
+  document.getElementById('hdr-mem').textContent=Math.round(memEntries);
+  document.getElementById('ft-uptime').textContent=`${hh}:${mm}:${ss}`;
+  document.getElementById('ft-total').textContent=totalTasks.toLocaleString();
+  document.getElementById('ft-latency').textContent=`${Math.round(8+Math.random()*4)} ms`;
+  const mP=Math.round(memEntries/memMax*100);
+  document.getElementById('mem-pct').textContent=mP+'%';
+  document.getElementById('mem-bar').style.width=mP+'%';
+  const nMax=10, nP=Math.round((activeNodeCount||6)/nMax*100);
+  document.getElementById('nodes-pct').textContent=nP+'%';
+  document.getElementById('nodes-bar').style.width=nP+'%';
+}
+
+// ─── MOUSE ────────────────────────────────────────────────────────────────────
+canvas.addEventListener('mousedown',e=>{isDragging=true;lastMX=e.clientX;lastMY=e.clientY;});
+window.addEventListener('mouseup',()=>isDragging=false);
+window.addEventListener('mousemove',e=>{
+  if(isDragging){rotY+=(e.clientX-lastMX)*.005;rotX+=(e.clientY-lastMY)*.005;lastMX=e.clientX;lastMY=e.clientY;}
+  const ry=autoRotY+rotY,rx=rotX;
+  const pn=getProjectedNodes(ry,rx);
+  const tt=document.getElementById('tooltip');
+  let found=null;
+  for(const n of pn){const r=n.size*n.pscale*.28,dx=e.clientX-n.px,dy=e.clientY-n.py;if(Math.sqrt(dx*dx+dy*dy)<r*3){found=n;break;}}
+  if(found){
+    hoveredNode=found.id;tt.classList.add('visible');
+    tt.style.left=(e.clientX+16)+'px';tt.style.top=(e.clientY-40)+'px';
+    document.getElementById('tt-name').textContent=found.name;
+    document.getElementById('tt-role').textContent=found.role;
+    document.getElementById('tt-model').textContent=found.model;
+    document.getElementById('tt-status').textContent=found.id==='cp'||found.id==='reg'?'always-on':'active';
+    document.getElementById('tt-ping').textContent=found.ping+'ms';
+    document.getElementById('tt-seen').textContent=found.lastSeen?new Date(found.lastSeen).toLocaleTimeString():'—';
+  }else{hoveredNode=null;tt.classList.remove('visible');}
+});
+
+// ─── BOOT ─────────────────────────────────────────────────────────────────────
+setTimeout(connectSSE, 500);
+setTimeout(()=>{ if(!liveMode){ addLog('Bridge offline — demo mode','warn'); startPolling(); }}, DEMO_MODE_DELAY);
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
