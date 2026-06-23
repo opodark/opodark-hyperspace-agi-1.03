@@ -1,6 +1,7 @@
 # node/main.py
 # HyperSpace AGI v1.02 — Unified Node
 # v1.02: middleware firma inter-nodo, /ollama/pull SSE, ollama-proxy, /memory
+# fix: heartbeat try/except+retry, endpoint normalizzato, peer TTL configurabile
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
@@ -41,6 +42,9 @@ REGISTRY_URL        = os.getenv("REGISTRY_URL", "http://registry:8086").strip().
 SIGN_REQUESTS       = os.getenv("SIGN_REQUESTS", "true").lower() == "true"
 _FORCED_TIER        = os.getenv("NODE_TIER", "").strip().lower()
 
+# Bug 4 fix: peer TTL configurabile via env (default 120s = 8 cicli heartbeat)
+PEER_MAX_AGE_S      = int(os.getenv("PEER_MAX_AGE_S", "120"))
+
 DATA_DIR = os.getenv("DATA_DIR", "/app/data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -66,19 +70,30 @@ def calculate_tier(vram_gb: float, uptime_s: float, reputation: float = 0.5) -> 
     if vram_gb >= 4.0:     return "hub"
     return "leaf"
 
-# VRAM: prima legge dal .env (utile quando nvidia-smi non è nel container),
-# poi prova a rilevare dal sistema. Il valore env ha precedenza se > 0.
-_vram_env = float(os.getenv("VRAM_GB", "0.0"))
+_vram_env      = float(os.getenv("VRAM_GB", "0.0"))
 _vram_detected = detect_vram_gb()
-VRAM_GB = _vram_env if _vram_env > 0.0 else _vram_detected
+VRAM_GB        = _vram_env if _vram_env > 0.0 else _vram_detected
 
 NODE_CAPABILITIES = ["execute"]
 if VRAM_GB > 0 or os.getenv("OLLAMA_URL"):
     NODE_CAPABILITIES.append("ollama")
 NODE_CAPABILITIES.append("ollama-proxy")
 
-_local_endpoint          = f"{NODE_HOSTNAME}:{NODE_PORT}"
-NODE_ADVERTISED_ENDPOINT = PUBLIC_ENDPOINT if PUBLIC_ENDPOINT else _local_endpoint
+# Bug 2 fix: normalizza endpoint con schema http:// fin dall'inizio
+def _normalize_endpoint(ep: str) -> str:
+    """Aggiunge http:// se l'endpoint non ha già uno schema."""
+    ep = ep.strip().rstrip("/")
+    if not ep:
+        return ep
+    if ep.startswith("http://") or ep.startswith("https://"):
+        return ep
+    return f"http://{ep}"
+
+_raw_local = f"{NODE_HOSTNAME}:{NODE_PORT}"
+if PUBLIC_ENDPOINT:
+    NODE_ADVERTISED_ENDPOINT = _normalize_endpoint(PUBLIC_ENDPOINT)
+else:
+    NODE_ADVERTISED_ENDPOINT = _normalize_endpoint(_raw_local)
 
 NODE_PROFILE = {
     "node_id":      NODE_ID,
@@ -95,13 +110,16 @@ _peers: dict = {}
 
 def register_peer(info: dict):
     nid = info.get("node_id")
+    ep  = _normalize_endpoint(info.get("endpoint", ""))
     if nid and nid != NODE_ID:
-        _peers[nid] = {**info, "last_seen": time.time(), "status": "active"}
+        _peers[nid] = {**info, "endpoint": ep, "last_seen": time.time(), "status": "active"}
 
-def prune_stale_peers(max_age_s: int = 60):
+def prune_stale_peers(max_age_s: int = None):
+    """Bug 4 fix: usa PEER_MAX_AGE_S configurabile invece di 60s hardcoded."""
+    age = max_age_s if max_age_s is not None else PEER_MAX_AGE_S
     now = time.time()
     for nid, p in list(_peers.items()):
-        if now - p["last_seen"] > max_age_s:
+        if now - p["last_seen"] > age:
             _peers[nid]["status"] = "stale"
 
 # ── MEMORIA COLLETTIVA (lettura) ───────────────────────────
@@ -122,9 +140,8 @@ def build_signed_payload(data: dict) -> dict:
     return sign_message(payload, _private_key)
 
 def peer_to_url(endpoint: str) -> str:
-    if endpoint.startswith("http://") or endpoint.startswith("https://"):
-        return endpoint.rstrip("/")
-    return f"http://{endpoint}"
+    """Bug 2 fix: idempotente, usa _normalize_endpoint."""
+    return _normalize_endpoint(endpoint)
 
 def _signed_headers(body: bytes = b"") -> dict:
     if not SIGN_REQUESTS:
@@ -183,7 +200,7 @@ async def register_to_control_plane():
         "node_id":      NODE_ID,
         "public_key":   NODE_PUBKEY,
         "tier":         NODE_PROFILE["tier"],
-        "endpoint":     NODE_ADVERTISED_ENDPOINT,
+        "endpoint":     NODE_ADVERTISED_ENDPOINT,   # Bug 2: già normalizzato
         "capabilities": NODE_PROFILE["capabilities"],
         "vram_gb":      VRAM_GB,
         "version":      NODE_PROFILE["version"],
@@ -197,6 +214,8 @@ async def register_to_control_plane():
             r = await client.post(f"{CONTROL_PLANE_URL}/mesh/announce", json=payload, headers=hdrs)
             if r.status_code == 200:
                 print(f"[NODE:{NODE_ID[:10]}] registered to control-plane OK")
+            else:
+                print(f"[NODE:{NODE_ID[:10]}] control-plane announce HTTP {r.status_code}")
     except Exception as e:
         print(f"[NODE:{NODE_ID[:10]}] control-plane announce failed: {e}")
 
@@ -231,16 +250,45 @@ async def announce_to_peer(endpoint: str):
     except Exception as e:
         print(f"[NODE:{NODE_ID[:10]}] announce failed -> {endpoint}: {e}")
 
+# ── HEARTBEAT — Bug 1 fix ─────────────────────────────────
+# Ogni asyncio.run() è ora protetto da try/except con log esplicito.
+# Il boot ha un retry automatico (max 3 tentativi, backoff 5s) per
+# gestire la race condition tra il nodo e il control-plane/registry.
+
+def _run_async_safe(coro_fn, label: str, *args, **kwargs):
+    """Esegue una coroutine in un nuovo event loop con logging degli errori."""
+    try:
+        asyncio.run(coro_fn(*args, **kwargs))
+    except Exception as e:
+        print(f"[NODE:{NODE_ID[:10]}] [{label}] ERROR: {e}")
+
 def heartbeat_loop():
     time.sleep(5)
 
+    # Boot con retry (Bug 1 + Bug 3 lato nodo)
     async def _boot():
         for peer_endpoint in BOOT_PEERS:
-            await announce_to_peer(peer_endpoint)
+            try:
+                await announce_to_peer(peer_endpoint)
+            except Exception as e:
+                print(f"[NODE:{NODE_ID[:10]}] boot announce failed -> {peer_endpoint}: {e}")
         await register_to_registry()
         await register_to_control_plane()
 
-    asyncio.run(_boot())
+    boot_ok = False
+    for attempt in range(1, 4):
+        try:
+            asyncio.run(_boot())
+            boot_ok = True
+            print(f"[NODE:{NODE_ID[:10]}] boot registration OK (attempt {attempt})")
+            break
+        except Exception as e:
+            print(f"[NODE:{NODE_ID[:10]}] boot attempt {attempt}/3 failed: {e}")
+            if attempt < 3:
+                time.sleep(5)
+
+    if not boot_ok:
+        print(f"[NODE:{NODE_ID[:10]}] WARNING: boot registration failed after 3 attempts — will retry in heartbeat")
 
     while True:
         time.sleep(HEARTBEAT_EVERY)
@@ -250,11 +298,20 @@ def heartbeat_loop():
         async def _hb():
             active = [p for p in _peers.values() if p["status"] == "active"]
             for peer in active:
-                await announce_to_peer(peer["endpoint"])
-            await register_to_registry()
-            await register_to_control_plane()
+                try:
+                    await announce_to_peer(peer["endpoint"])
+                except Exception as e:
+                    print(f"[NODE:{NODE_ID[:10]}] hb announce failed -> {peer['endpoint']}: {e}")
+            try:
+                await register_to_registry()
+            except Exception as e:
+                print(f"[NODE:{NODE_ID[:10]}] hb registry failed: {e}")
+            try:
+                await register_to_control_plane()
+            except Exception as e:
+                print(f"[NODE:{NODE_ID[:10]}] hb control-plane failed: {e}")
 
-        asyncio.run(_hb())
+        _run_async_safe(_hb, "heartbeat")
 
 # ── STARTUP ───────────────────────────────────────────────
 @app.on_event("startup")
@@ -266,6 +323,7 @@ async def startup_event():
     print(f"[NODE:{NODE_ID[:10]}] advertised={NODE_ADVERTISED_ENDPOINT}")
     print(f"[NODE:{NODE_ID[:10]}] vram_gb={VRAM_GB} (env={_vram_env} detected={_vram_detected})")
     print(f"[NODE:{NODE_ID[:10]}] boot_peers={BOOT_PEERS}")
+    print(f"[NODE:{NODE_ID[:10]}] peer_max_age_s={PEER_MAX_AGE_S}")
     print(f"[NODE:{NODE_ID[:10]}] ollama -> {OLLAMA_URL}")
 
 # ── MIDDLEWARE firma ───────────────────────────────────────
@@ -295,18 +353,18 @@ def health():
 def status():
     prune_stale_peers()
     return {
-        "node_id":      NODE_ID,
-        "public_key":   NODE_PUBKEY,
-        "tier":         NODE_PROFILE["tier"],
-        "version":      NODE_PROFILE["version"],
-        "endpoint":     NODE_ADVERTISED_ENDPOINT,
-        "capabilities": NODE_CAPABILITIES,
-        "vram_gb":      VRAM_GB,
-        "uptime_s":     int(time.time() - _boot_time),
-        "peers_active": len([p for p in _peers.values() if p["status"] == "active"]),
-        "peers_total":  len(_peers),
+        "node_id":        NODE_ID,
+        "public_key":     NODE_PUBKEY,
+        "tier":           NODE_PROFILE["tier"],
+        "version":        NODE_PROFILE["version"],
+        "endpoint":       NODE_ADVERTISED_ENDPOINT,
+        "capabilities":   NODE_CAPABILITIES,
+        "vram_gb":        VRAM_GB,
+        "uptime_s":       int(time.time() - _boot_time),
+        "peers_active":   len([p for p in _peers.values() if p["status"] == "active"]),
+        "peers_total":    len(_peers),
         "memory_entries": len(_read_memory(9999)),
-        "running":      True,
+        "running":        True,
     }
 
 @app.get("/peers")
@@ -330,12 +388,10 @@ def get_peers():
 
 @app.get("/memory")
 def get_memory(limit: int = 50):
-    """Ultime interazioni reali dalla WebUI (memoria collettiva)."""
     return {"node_id": NODE_ID, "entries": _read_memory(limit)}
 
 @app.post("/memory/push")
 async def receive_memory(payload: dict):
-    """Riceve una memory entry da un peer."""
     entry = payload.get("entry", {})
     if entry and entry.get("node_id") != NODE_ID:
         entry["_received_from"] = payload.get("node_id", "unknown")
@@ -416,9 +472,9 @@ async def ollama_pull(body: dict):
                     async for line in resp.aiter_lines():
                         if line.strip():
                             yield f"data: {line}\n\n"
-            yield "data: {\"status\":\"done\"}\n\n"
+            yield 'data: {"status":"done"}\n\n'
         except Exception as e:
-            yield f"data: {{\"error\": \"{e}\"}}\n\n"
+            yield f'data: {{"error": "{e}"}}\n\n'
 
     return StreamingResponse(
         stream_pull(), media_type="text/event-stream",
