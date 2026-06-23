@@ -42,9 +42,8 @@
   .node-name{font-size:.7rem;color:var(--color-text);letter-spacing:.05em}
   .node-role{font-size:.58rem;color:var(--color-muted);margin-top:1px}
   .node-ping{font-size:.58rem;margin-left:auto;font-family:var(--font-display)}
-  .node-status-badge{font-size:.55rem;padding:1px 5px;border-radius:3px;margin-left:4px;font-family:var(--font-display)}
+  .badge{font-size:.55rem;padding:1px 5px;border-radius:3px;margin-left:4px;font-family:var(--font-display)}
   .badge-ok{background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.3)}
-  .badge-warn{background:rgba(245,158,11,.15);color:#f59e0b;border:1px solid rgba(245,158,11,.3)}
   .badge-off{background:rgba(100,116,139,.15);color:#64748b;border:1px solid rgba(100,116,139,.3)}
   .stat-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04)}
   .stat-row:last-child{border-bottom:none}
@@ -66,15 +65,15 @@
   .tooltip-row span:last-child{color:var(--color-text)}
   .center-hud{position:fixed;z-index:5;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none}
   .center-label{font-family:var(--font-display);font-size:.6rem;letter-spacing:.2em;color:rgba(0,245,255,.2);text-transform:uppercase}
-  /* connection indicator */
-  #conn-indicator{position:fixed;bottom:52px;right:24px;z-index:20;font-size:.6rem;font-family:var(--font-display);display:flex;align-items:center;gap:6px;opacity:.7}
-  #conn-dot{width:6px;height:6px;border-radius:50%;background:var(--color-muted)}
-  /* log panel */
-  #log-panel{position:fixed;bottom:52px;left:50%;transform:translateX(-50%);z-index:10;background:rgba(6,8,16,.85);border:1px solid rgba(0,245,255,.08);border-radius:6px;padding:8px 14px;width:420px;max-height:90px;overflow:hidden;backdrop-filter:blur(8px)}
+  #conn-indicator{position:fixed;bottom:52px;right:24px;z-index:20;font-size:.6rem;font-family:var(--font-display);display:flex;align-items:center;gap:6px;opacity:.8}
+  #conn-dot{width:6px;height:6px;border-radius:50%;background:var(--color-muted);transition:background .5s}
+  #log-panel{position:fixed;bottom:52px;left:50%;transform:translateX(-50%);z-index:10;background:rgba(6,8,16,.85);border:1px solid rgba(0,245,255,.08);border-radius:6px;padding:8px 14px;width:460px;max-height:90px;overflow:hidden;backdrop-filter:blur(8px)}
   #log-list{list-style:none;display:flex;flex-direction:column-reverse;gap:2px}
-  .log-entry{font-size:.6rem;color:var(--color-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;animation:fadeIn .3s forwards}
+  .log-entry{font-size:.6rem;color:var(--color-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;animation:fadeIn .4s forwards}
   .log-entry.task{color:var(--color-primary)}
   .log-entry.memory{color:var(--color-success)}
+  .log-entry.dream{color:#c084fc}
+  .log-entry.chat{color:#fb923c}
   .log-entry.warn{color:var(--color-warning)}
   @keyframes fadeIn{to{opacity:1}}
 </style>
@@ -82,7 +81,6 @@
 </head>
 <body>
 <canvas id="c"></canvas>
-
 <header>
   <div class="logo">
     <svg viewBox="0 0 28 28" fill="none">
@@ -106,9 +104,9 @@
     <div style="width:1px;height:28px;background:rgba(0,245,255,.1)"></div>
     <div><div class="status-label">Active Nodes</div><div class="status-val" id="hdr-nodes">—</div></div>
     <div style="width:1px;height:28px;background:rgba(0,245,255,.1)"></div>
-    <div><div class="status-label">Tasks/s</div><div class="status-val" id="hdr-tps">—</div></div>
+    <div><div class="status-label">Events/s</div><div class="status-val" id="hdr-tps">—</div></div>
     <div style="width:1px;height:28px;background:rgba(0,245,255,.1)"></div>
-    <div><div class="status-label">Memory Entries</div><div class="status-val" id="hdr-mem">—</div></div>
+    <div><div class="status-label">Memory</div><div class="status-val" id="hdr-mem">—</div></div>
     <div style="width:1px;height:28px;background:rgba(0,245,255,.1)"></div>
     <div><div class="status-label">File Size</div><div class="status-val" id="hdr-fsize">—</div></div>
   </div>
@@ -125,8 +123,7 @@
   <div class="stat-row"><span class="stat-key">Max Entries</span><span class="stat-val" id="cp-max">—</span></div>
   <div class="stat-row"><span class="stat-key">Compress</span><span class="stat-val">gzip</span></div>
   <div class="stat-row"><span class="stat-key">Transport</span><span class="stat-val">REST/ngrok</span></div>
-  <div class="stat-row"><span class="stat-key">Registry</span><span class="stat-val">:8086</span></div>
-  <div class="stat-row"><span class="stat-key">CP Port</span><span class="stat-val">:8000</span></div>
+  <div class="stat-row"><span class="stat-key">Bridge</span><span class="stat-val" id="cp-bridge">—</span></div>
   <div class="gauge-wrap">
     <div class="gauge-label"><span>Memory usage</span><span id="mem-pct">0%</span></div>
     <div class="gauge-track"><div class="gauge-fill" id="mem-bar" style="width:0%;background:var(--color-primary)"></div></div>
@@ -148,310 +145,285 @@
   <div class="tooltip-row"><span>Last seen</span><span id="tt-seen"></span></div>
 </div>
 
-<div id="log-panel">
-  <ul id="log-list"></ul>
-</div>
+<div id="log-panel"><ul id="log-list"></ul></div>
 
 <div id="conn-indicator">
   <div id="conn-dot"></div>
-  <span id="conn-label">bridge offline</span>
+  <span id="conn-label">connecting…</span>
 </div>
 
 <footer>
   <div class="footer-item"><div class="footer-key">Uptime</div><div class="footer-val" id="ft-uptime">00:00:00</div></div>
   <div class="footer-divider"></div>
-  <div class="footer-item"><div class="footer-key">Total Tasks</div><div class="footer-val" id="ft-total">0</div></div>
+  <div class="footer-item"><div class="footer-key">Total Events</div><div class="footer-val" id="ft-total">0</div></div>
   <div class="footer-divider"></div>
-  <div class="footer-item"><div class="footer-key">Mesh Latency</div><div class="footer-val" id="ft-latency">— ms</div></div>
+  <div class="footer-item"><div class="footer-key">CP Port</div><div class="footer-val">:8085</div></div>
   <div class="footer-divider"></div>
   <div class="footer-item"><div class="footer-key">Registry</div><div class="footer-val">:8086</div></div>
   <div class="footer-divider"></div>
-  <div class="footer-item"><div class="footer-key">Control Plane</div><div class="footer-val">:8000</div></div>
+  <div class="footer-item"><div class="footer-key">Bridge</div><div class="footer-val">:8099</div></div>
   <div class="footer-divider"></div>
   <div class="footer-item"><div class="footer-key">Framework</div><div class="footer-val">HyperSpace v1.02</div></div>
 </footer>
 
 <script>
-// ─── CONFIG ──────────────────────────────────────────────────────────────────
-// SSE bridge runs on :8099 (infra-ui/server.py)
-// Falls back to demo mode if bridge is unreachable
-const BRIDGE_URL      = 'http://localhost:8099';
-const SSE_ENDPOINT    = `${BRIDGE_URL}/events`;
-const POLL_INTERVAL   = 5000;   // ms between REST polls
-const DEMO_MODE_DELAY = 3000;   // ms to wait before fallback to demo
-
-// ─── LINK CONFIG ─────────────────────────────────────────────────────────────
+// ── CONFIG ─────────────────────────────────────────────────────────────────
+const BRIDGE = 'http://localhost:8099';
 const LINK_BASE_OPACITY   = 0.04;
 const LINK_ACTIVE_OPACITY = 0.90;
-const LINK_DECAY          = 0.018;
+const LINK_DECAY          = 0.016;
 const LINK_MIN_WIDTH      = 0.5;
 const LINK_MAX_WIDTH      = 2.8;
-const FLASH_PULSE_SPEED   = 0.22;
+const FLASH_PULSE_SPEED   = 0.20;
 
-// ─── NODE REGISTRY ───────────────────────────────────────────────────────────
-// Populated from /nodes/active; fallback static set used in demo mode
-const DEFAULT_NODES = [
-  {id:'cp',  name:'Control Plane', role:'Orchestrator',     model:'—',            color:'#00f5ff', size:18, ping:2,  lastSeen:null},
-  {id:'n1',  name:'node-1',        role:'Executor',         model:'phi3:mini',    color:'#a855f7', size:11, ping:12, lastSeen:null},
-  {id:'n2',  name:'node-2',        role:'Executor',         model:'llama3:8b',    color:'#a855f7', size:11, ping:18, lastSeen:null},
-  {id:'n3',  name:'node-3',        role:'Planner',          model:'mistral:7b',   color:'#ff6b35', size:12, ping:9,  lastSeen:null},
-  {id:'n4',  name:'node-4',        role:'Memory',           model:'qwen:4b',      color:'#22c55e', size:10, ping:24, lastSeen:null},
-  {id:'n5',  name:'node-5',        role:'Executor',         model:'phi3:mini',    color:'#a855f7', size:10, ping:31, lastSeen:null},
-  {id:'n6',  name:'remote-A',      role:'Remote Peer',      model:'llama3:8b-q4', color:'#f59e0b', size:9,  ping:67, lastSeen:null},
-  {id:'reg', name:'Registry',      role:'Service Discovery',model:'—',            color:'#64748b', size:8,  ping:1,  lastSeen:null},
+// ── STATIC NODE REGISTRY (augmented by live /mesh/nodes) ─────────────────
+const NODES = [
+  {id:'cp',  name:'Control Plane', role:'Orchestrator',     model:'—',            color:'#00f5ff', size:18, ping:2,  status:'active'},
+  {id:'n1',  name:'node-1',        role:'Executor',         model:'phi3:mini',    color:'#a855f7', size:11, ping:12, status:'unknown'},
+  {id:'n2',  name:'node-2',        role:'Executor',         model:'llama3:8b',    color:'#a855f7', size:11, ping:18, status:'unknown'},
+  {id:'n3',  name:'node-3',        role:'Planner',          model:'mistral:7b',   color:'#ff6b35', size:12, ping:9,  status:'unknown'},
+  {id:'n4',  name:'node-4',        role:'Memory',           model:'qwen:4b',      color:'#22c55e', size:10, ping:24, status:'unknown'},
+  {id:'n5',  name:'node-5',        role:'Executor',         model:'phi3:mini',    color:'#a855f7', size:10, ping:31, status:'unknown'},
+  {id:'n6',  name:'remote-A',      role:'Remote Peer',      model:'llama3:8b-q4', color:'#f59e0b', size:9,  ping:67, status:'unknown'},
+  {id:'reg', name:'Registry',      role:'Service Discovery',model:'—',            color:'#64748b', size:8,  ping:1,  status:'active'},
 ];
 
-let NODES = JSON.parse(JSON.stringify(DEFAULT_NODES));
+// live node_id -> NODES entry mapping (populated from heartbeat)
+const liveNodeMap = {}; // live node_id (e.g. "abc123") -> NODES entry
 
 const LINK_DEFS = [
   ['cp','n1'],['cp','n2'],['cp','n3'],['cp','n4'],['cp','n5'],
   ['n3','n1'],['n3','n2'],['n4','n1'],['n4','n2'],
   ['n1','n5'],['cp','n6'],['cp','reg'],['n3','n6'],
 ];
-
-const links = LINK_DEFS.map(([a,b])=>({a,b,energy:0,pulse:-1,dir:1,totalTasks:0}));
+const links = LINK_DEFS.map(([a,b])=>({a,b,energy:0,pulse:-1,dir:1,type:'task'}));
 const linkMap={};
 links.forEach(l=>{linkMap[l.a+'|'+l.b]=l;linkMap[l.b+'|'+l.a]=l;});
 
-function fireLink(fromId,toId,type='task'){
-  const l=linkMap[fromId+'|'+toId];
-  if(!l)return;
-  l.energy=1.0;
-  l.pulse=0;
-  l.dir=(l.a===fromId)?1:-1;
-  l.type=type;  // 'task' | 'memory' | 'heartbeat'
-  l.totalTasks++;
-  totalTasks++;
+function resolveId(rawId){
+  // try exact match first
+  if(NODES.find(n=>n.id===rawId)) return rawId;
+  // try live map
+  const mapped = liveNodeMap[rawId];
+  if(mapped) return mapped.id;
+  // fuzzy: node_id contains one of our node names
+  for(const n of NODES){
+    if(rawId.toLowerCase().includes(n.name.toLowerCase()) ||
+       n.name.toLowerCase().includes(rawId.toLowerCase())) return n.id;
+  }
+  // fallback: map first char to a node pool
+  const pool=['n1','n2','n3','n4','n5'];
+  return pool[rawId.charCodeAt(0)%pool.length];
 }
 
-// ─── CANVAS ───────────────────────────────────────────────────────────────────
-const canvas=document.getElementById('c');
-const ctx=canvas.getContext('2d');
+function fireLink(fromRaw, toRaw, type='task'){
+  const from=resolveId(fromRaw), to=resolveId(toRaw);
+  if(from===to) return;
+  const l=linkMap[from+'|'+to];
+  if(!l) return;
+  l.energy=1.0; l.pulse=0;
+  l.dir=(l.a===from)?1:-1;
+  l.type=type;
+  totalEvents++;
+}
+
+// ── CANVAS ───────────────────────────────────────────────────────────────────
+const canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
 let W,H,cx,cy;
 function resize(){W=canvas.width=window.innerWidth;H=canvas.height=window.innerHeight;cx=W/2;cy=H/2;}
-resize(); window.addEventListener('resize',resize);
-
-// ─── 3D ───────────────────────────────────────────────────────────────────────
+resize();window.addEventListener('resize',resize);
 const SPHERE_R=()=>Math.min(W,H)*0.28;
 function spherePos(i,total,r){const phi=Math.acos(1-2*(i+.5)/total),theta=Math.PI*(1+Math.sqrt(5))*i;return{x:r*Math.sin(phi)*Math.cos(theta),y:r*Math.sin(phi)*Math.sin(theta),z:r*Math.cos(phi)};}
 let nodePositions={};
-function buildPositions(){
-  const r=SPHERE_R(); nodePositions['cp']={x:0,y:0,z:0};
-  const peri=NODES.filter(n=>n.id!=='cp');
-  peri.forEach((n,i)=>{nodePositions[n.id]=spherePos(i,peri.length,r);});
-}
-buildPositions(); window.addEventListener('resize',buildPositions);
-let rotX=0.15,rotY=0,autoRotY=0;
-let isDragging=false,lastMX=0,lastMY=0;
+function buildPositions(){const r=SPHERE_R();nodePositions['cp']={x:0,y:0,z:0};const peri=NODES.filter(n=>n.id!=='cp');peri.forEach((n,i)=>{nodePositions[n.id]=spherePos(i,peri.length,r);});}
+buildPositions();window.addEventListener('resize',buildPositions);
+let rotX=0.15,rotY=0,autoRotY=0,isDragging=false,lastMX=0,lastMY=0;
 function rotatePoint(p,rx,ry){let x1=p.x*Math.cos(ry)+p.z*Math.sin(ry),z1=-p.x*Math.sin(ry)+p.z*Math.cos(ry),y2=p.y*Math.cos(rx)-z1*Math.sin(rx),z2=p.y*Math.sin(rx)+z1*Math.cos(rx);return{x:x1,y:y2,z:z2};}
 function project(p){const fov=900,z=p.z+fov,s=fov/z;return{x:cx+p.x*s,y:cy+p.y*s,scale:s};}
-function getProjectedNodes(ry,rx){return NODES.map(n=>{const rot=rotatePoint(nodePositions[n.id]||{x:0,y:0,z:0},rx,ry),proj=project(rot);return{...n,px:proj.x,py:proj.y,pscale:proj.scale,pz:rot.z};}).sort((a,b)=>a.pz-b.pz);}
-
-// ─── PARTICLES ────────────────────────────────────────────────────────────────
+function getPN(ry,rx){return NODES.map(n=>{const rot=rotatePoint(nodePositions[n.id]||{x:0,y:0,z:0},rx,ry),proj=project(rot);return{...n,px:proj.x,py:proj.y,pscale:proj.scale,pz:rot.z};}).sort((a,b)=>a.pz-b.pz);}
 const particles=[];
 for(let i=0;i<120;i++){const phi=Math.random()*Math.PI*2,theta=Math.random()*Math.PI*2,r=SPHERE_R()*(0.9+Math.random()*0.4);particles.push({x:r*Math.sin(theta)*Math.cos(phi),y:r*Math.sin(theta)*Math.sin(phi),z:r*Math.cos(theta),size:Math.random()*1.5+.3,brightness:Math.random(),tw:Math.random()*Math.PI*2});}
-
-// ─── ORBIT RINGS ─────────────────────────────────────────────────────────────
 const rings=[{rx:0,ry:0,rf:1.15,color:'#00f5ff',opacity:.07},{rx:Math.PI/2,ry:.3,rf:1.05,color:'#a855f7',opacity:.05},{rx:.4,ry:Math.PI/3,rf:.9,color:'#ff6b35',opacity:.04}];
 function drawRing(ring,ry,rx){const r=SPHERE_R()*ring.rf,steps=120;ctx.beginPath();for(let i=0;i<=steps;i++){const a=(i/steps)*Math.PI*2,p={x:r*Math.cos(a),y:r*Math.sin(a)*Math.cos(ring.rx),z:r*Math.sin(a)*Math.sin(ring.rx)},pr=rotatePoint(p,rx,ry+ring.ry),pp=project(pr);i===0?ctx.moveTo(pp.x,pp.y):ctx.lineTo(pp.x,pp.y);}ctx.closePath();ctx.strokeStyle=ring.color;ctx.globalAlpha=ring.opacity;ctx.lineWidth=1;ctx.stroke();ctx.globalAlpha=1;}
-
-// ─── HELPERS ─────────────────────────────────────────────────────────────────
 function lerp(a,b,t){return a+(b-a)*t;}
-function hexToRgb(h){const r=parseInt(h.slice(1,3),16),g=parseInt(h.slice(3,5),16),b=parseInt(h.slice(5,7),16);return`${r},${g},${b}`;}
-function typeColor(type){return type==='memory'?'#22c55e':type==='heartbeat'?'#64748b':'#00f5ff';}
+function hexToRgb(h){return`${parseInt(h.slice(1,3),16)},${parseInt(h.slice(3,5),16)},${parseInt(h.slice(5,7),16)}`;}
+function typeColor(t){return t==='memory'?'#22c55e':t==='dream'?'#c084fc':t==='chat'?'#fb923c':t==='heartbeat'?'#64748b':'#00f5ff';}
 
-// ─── LOG PANEL ────────────────────────────────────────────────────────────────
+// ── STATE ───────────────────────────────────────────────────────────────────
+let totalEvents=0,lastTotal=0,eps=0,epsTimer=0;
+let memEntries=0,memMax=200,memFileSizeKb=0,memTTL=7;
+let startTime=Date.now(),hoveredNode=null,lastFrameTime=performance.now();
+let liveMode=false,activeNodeCount=0;
+
+// ── LOG ──────────────────────────────────────────────────────────────────────
 const logList=document.getElementById('log-list');
-const LOG_MAX=5;
 function addLog(msg,type='task'){
   const li=document.createElement('li');
   li.className=`log-entry ${type}`;
-  li.textContent=`[${new Date().toLocaleTimeString()}] ${msg}`;
+  li.textContent=`[${new Date().toLocaleTimeString('it-IT')}] ${msg}`;
   logList.prepend(li);
-  while(logList.children.length>LOG_MAX) logList.removeChild(logList.lastChild);
+  while(logList.children.length>5) logList.removeChild(logList.lastChild);
 }
 
-// ─── STATE ────────────────────────────────────────────────────────────────────
-let totalTasks=0,lastTotal=0,tps=0,tpsTimer=0;
-let memEntries=0,memMax=200,memFileSizeKb=0,memTTL=7;
-let startTime=Date.now();
-let hoveredNode=null;
-let lastFrameTime=performance.now();
-let liveMode=false;  // true once SSE or REST connected
-let activeNodeCount=0;
-
-// demo mode scheduler
-const DEMO_ROUTES=[
-  {from:'cp',to:'n3',weight:3},{from:'n3',to:'n1',weight:4},{from:'n3',to:'n2',weight:3},
-  {from:'cp',to:'n4',weight:2},{from:'n4',to:'n1',weight:2},{from:'n4',to:'n2',weight:2},
-  {from:'n1',to:'cp',weight:2},{from:'n2',to:'cp',weight:2},
-  {from:'cp',to:'n5',weight:1},{from:'n1',to:'n5',weight:1},
-  {from:'cp',to:'n6',weight:1},{from:'n3',to:'n6',weight:1},{from:'cp',to:'reg',weight:1},
-];
-const demoTW=DEMO_ROUTES.reduce((s,r)=>s+r.weight,0);
-function demoRoute(){let r=Math.random()*demoTW,acc=0;for(const rt of DEMO_ROUTES){acc+=rt.weight;if(r<acc)return rt;}return DEMO_ROUTES[0];}
-let demoTimer=0,demoNextIn=300;
-
-// ─── LIVE DATA: SSE ───────────────────────────────────────────────────────────
-function connectSSE(){
-  try{
-    const es=new EventSource(SSE_ENDPOINT);
-    es.onopen=()=>{
-      setConn('live','#22c55e');
-      liveMode=true;
-      document.getElementById('mesh-dot').className='status-dot';
-      document.getElementById('mesh-status').textContent='ONLINE';
-      addLog('SSE bridge connected','task');
-    };
-    // task event: {"from":"cp","to":"n3","type":"task","label":"Plan: summarize doc"}
-    es.addEventListener('task',(e)=>{
-      try{
-        const d=JSON.parse(e.data);
-        fireLink(d.from,d.to,d.type||'task');
-        addLog(`${d.label||'task'} ${d.from}→${d.to}`,d.type||'task');
-      }catch(_){}
-    });
-    // memory_sync event: {"from":"cp","to":"n4","entries":143}
-    es.addEventListener('memory_sync',(e)=>{
-      try{
-        const d=JSON.parse(e.data);
-        fireLink(d.from,d.to,'memory');
-        addLog(`memory sync ${d.from}→${d.to} (${d.entries} entries)`,'memory');
-      }catch(_){}
-    });
-    // heartbeat event: {"node_id":"n1"}
-    es.addEventListener('heartbeat',(e)=>{
-      try{
-        const d=JSON.parse(e.data);
-        fireLink('cp',d.node_id,'heartbeat');
-      }catch(_){}
-    });
-    es.onerror=()=>{ setConn('poll','#f59e0b'); es.close(); startPolling(); };
-  }catch(err){ startPolling(); }
-}
-
-// ─── LIVE DATA: REST POLLING fallback ────────────────────────────────────────
-let pollHandle=null;
-async function pollOnce(){
-  try{
-    // memory stats
-    const ms=await fetch(`${BRIDGE_URL}/proxy/memory/stats`,{signal:AbortSignal.timeout(3000)}).then(r=>r.json());
-    memEntries  = ms.entries   ?? memEntries;
-    memMax      = ms.max_entries ?? memMax;
-    memFileSizeKb = ms.file_size_kb ?? memFileSizeKb;
-    memTTL      = ms.ttl_days  ?? memTTL;
-    document.getElementById('cp-ttl').textContent = memTTL;
-    document.getElementById('cp-max').textContent = memMax;
-    document.getElementById('hdr-fsize').textContent = memFileSizeKb.toFixed(1)+' KB';
-    liveMode=true;
-    setConn('poll','#f59e0b');
-  }catch(_){}
-  try{
-    // active nodes
-    const an=await fetch(`${BRIDGE_URL}/proxy/nodes/active`,{signal:AbortSignal.timeout(3000)}).then(r=>r.json());
-    activeNodeCount = Array.isArray(an) ? an.length : (an.nodes?.length ?? activeNodeCount);
-    // update node list colors/status from live data
-    if(Array.isArray(an)){
-      an.forEach(live=>{
-        const n=NODES.find(x=>x.id===live.node_id||x.name===live.node_id);
-        if(n){n.ping=live.ping??n.ping; n.lastSeen=live.last_seen??null;}
-      });
-    }
-    renderNodeList();
-  }catch(_){}
-}
-function startPolling(){
-  if(pollHandle) return;
-  pollOnce();
-  pollHandle=setInterval(pollOnce,POLL_INTERVAL);
-}
-
-function setConn(label,color){
-  document.getElementById('conn-dot').style.background=color;
-  document.getElementById('conn-label').textContent=label==='live'?'SSE live':label==='poll'?'REST poll':'bridge offline';
-}
-
-// ─── NODE LIST HTML ───────────────────────────────────────────────────────────
+// ── NODE LIST ──────────────────────────────────────────────────────────────
 function renderNodeList(){
   const list=document.getElementById('node-list');
   list.innerHTML='';
   NODES.forEach(n=>{
-    const isActive = n.id==='cp'||n.id==='reg'|| (activeNodeCount>0 ? true : true);
     const div=document.createElement('div');
     div.className='node-item';
-    const seen=n.lastSeen ? new Date(n.lastSeen).toLocaleTimeString() : '—';
+    const live=n.status==='active';
     div.innerHTML=`
       <div class="node-dot" style="background:${n.color};box-shadow:0 0 5px ${n.color}"></div>
       <div><div class="node-name">${n.name}</div><div class="node-role">${n.role}</div></div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
         <span class="node-ping" style="color:${n.ping<20?'#22c55e':n.ping<50?'#f59e0b':'#ef4444'}">${n.ping}ms</span>
-        <span class="node-status-badge ${isActive?'badge-ok':'badge-off'}">${isActive?'LIVE':'IDLE'}</span>
+        <span class="badge ${live?'badge-ok':'badge-off'}">${live?'LIVE':'IDLE'}</span>
       </div>`;
     list.appendChild(div);
   });
 }
 renderNodeList();
 
-// ─── MAIN DRAW LOOP ───────────────────────────────────────────────────────────
+// ── SSE ───────────────────────────────────────────────────────────────────────
+function setConn(mode){
+  const colors={live:'#22c55e',poll:'#f59e0b',demo:'#64748b',connecting:'#64748b'};
+  const labels={live:'SSE live ●',poll:'REST poll',demo:'demo mode',connecting:'connecting…'};
+  document.getElementById('conn-dot').style.background=colors[mode]||'#64748b';
+  document.getElementById('conn-label').textContent=labels[mode]||mode;
+  document.getElementById('cp-bridge').textContent=mode==='live'?'SSE':mode==='poll'?'REST':'offline';
+  if(mode==='live'||mode==='poll'){
+    document.getElementById('mesh-dot').className='status-dot';
+    document.getElementById('mesh-status').textContent='ONLINE';
+  }
+}
+
+function connectSSE(){
+  setConn('connecting');
+  const es=new EventSource(`${BRIDGE}/events`);
+  es.addEventListener('connected',()=>{
+    liveMode=true;
+    setConn('live');
+    addLog('Bridge SSE connected','task');
+  });
+  es.addEventListener('heartbeat',e=>{
+    try{
+      const d=JSON.parse(e.data);
+      const nid=d.node_id||'';
+      // find matching NODES entry by partial name match
+      let matched=NODES.find(n=>n.id===nid);
+      if(!matched){
+        // assign to first non-active node as live stand-in
+        matched=NODES.find(n=>n.id!=='cp'&&n.id!=='reg'&&n.status!=='active');
+      }
+      if(matched){
+        matched.status='active';
+        matched.ping=d.ping||matched.ping;
+        liveNodeMap[nid]=matched;
+        activeNodeCount=NODES.filter(n=>n.status==='active'&&n.id!=='cp'&&n.id!=='reg').length;
+        renderNodeList();
+        fireLink('cp',matched.id,'heartbeat');
+      }
+    }catch(_){}
+  });
+  es.addEventListener('task',e=>{
+    try{
+      const d=JSON.parse(e.data);
+      fireLink(d.from,d.to,d.type||'task');
+      addLog(`${d.label||'task'}: ${d.from}→${d.to}`,d.type||'task');
+    }catch(_){}
+  });
+  es.addEventListener('memory_sync',e=>{
+    try{
+      const d=JSON.parse(e.data);
+      fireLink(d.from||'cp',d.to||'n4','memory');
+      addLog(`mem-sync: ${d.label||''}`, 'memory');
+    }catch(_){}
+  });
+  es.addEventListener('memory_stats',e=>{
+    try{
+      const d=JSON.parse(e.data);
+      memEntries=d.entries??memEntries;
+      memMax=d.max_entries??memMax;
+      memFileSizeKb=d.file_size_kb??memFileSizeKb;
+      memTTL=d.ttl_days??memTTL;
+      document.getElementById('cp-ttl').textContent=memTTL;
+      document.getElementById('cp-max').textContent=memMax;
+      document.getElementById('hdr-fsize').textContent=memFileSizeKb.toFixed(1)+' KB';
+    }catch(_){}
+  });
+  es.addEventListener('dream',e=>{
+    try{
+      const d=JSON.parse(e.data);
+      addLog(`✨ ${d.node}: ${d.label}`,'dream');
+      // fire a random link to visualise dream
+      const pool=['n1','n2','n3','n4','n5'];
+      fireLink('cp',pool[Math.floor(Math.random()*pool.length)],'dream');
+    }catch(_){}
+  });
+  es.onerror=()=>{
+    liveMode=false;
+    setConn('poll');
+    es.close();
+    setTimeout(connectSSE, 5000); // retry
+  };
+}
+
+// ── DEMO FALLBACK (fires if no SSE event arrives in 6s) ───────────────────
+const DEMO_ROUTES=[
+  {from:'cp',to:'n3',w:3},{from:'n3',to:'n1',w:4},{from:'n3',to:'n2',w:3},
+  {from:'cp',to:'n4',w:2},{from:'n4',to:'n1',w:2},{from:'n4',to:'n2',w:2},
+  {from:'n1',to:'cp',w:2},{from:'n2',to:'cp',w:2},
+  {from:'cp',to:'n5',w:1},{from:'cp',to:'n6',w:1},{from:'n3',to:'n6',w:1},
+];
+const demoTW=DEMO_ROUTES.reduce((s,r)=>s+r.w,0);
+function demoRoute(){let r=Math.random()*demoTW,acc=0;for(const rt of DEMO_ROUTES){acc+=rt.w;if(r<acc)return rt;}return DEMO_ROUTES[0];}
+let demoTimer=0,demoNextIn=350,lastEventTs=Date.now();
+
+// ── DRAW ──────────────────────────────────────────────────────────────────────
 function draw(ts){
   requestAnimationFrame(draw);
   const dt=Math.min(ts-lastFrameTime,50);
   lastFrameTime=ts;
-
   if(!isDragging) autoRotY+=.0025;
   const ry=autoRotY+rotY,rx=rotX;
-
-  ctx.fillStyle='#060810';
-  ctx.fillRect(0,0,W,H);
-
-  particles.forEach(p=>{
-    const rot=rotatePoint(p,rx,ry),proj=project(rot);
-    if(proj.scale<.5)return;
-    const tw=.5+.5*Math.sin(p.tw+ts*.001);
-    ctx.beginPath();ctx.arc(proj.x,proj.y,p.size*proj.scale*.18,0,Math.PI*2);
-    ctx.fillStyle=`rgba(200,220,255,${p.brightness*tw*.6})`;ctx.fill();
-  });
-
+  ctx.fillStyle='#060810';ctx.fillRect(0,0,W,H);
+  particles.forEach(p=>{const rot=rotatePoint(p,rx,ry),proj=project(rot);if(proj.scale<.5)return;const tw=.5+.5*Math.sin(p.tw+ts*.001);ctx.beginPath();ctx.arc(proj.x,proj.y,p.size*proj.scale*.18,0,Math.PI*2);ctx.fillStyle=`rgba(200,220,255,${p.brightness*tw*.6})`;ctx.fill();});
   rings.forEach(r=>drawRing(r,ry,rx));
-
-  const projNodes=getProjectedNodes(ry,rx);
+  const projNodes=getPN(ry,rx);
   const nodeMap={}; projNodes.forEach(n=>{nodeMap[n.id]=n;});
-
-  // ── links ─────────────────────────────────────────────────────────────────
+  // links
   links.forEach(link=>{
     link.energy=Math.max(0,link.energy-LINK_DECAY*(dt/16));
     const na=nodeMap[link.a],nb=nodeMap[link.b];
     if(!na||!nb)return;
-    const opacity=lerp(LINK_BASE_OPACITY,LINK_ACTIVE_OPACITY,link.energy);
-    const width=lerp(LINK_MIN_WIDTH,LINK_MAX_WIDTH,link.energy);
-    const tc=typeColor(link.type);
+    const op=lerp(LINK_BASE_OPACITY,LINK_ACTIVE_OPACITY,link.energy);
+    const ww=lerp(LINK_MIN_WIDTH,LINK_MAX_WIDTH,link.energy);
     const grad=ctx.createLinearGradient(na.px,na.py,nb.px,nb.py);
-    grad.addColorStop(0,`rgba(${hexToRgb(na.color)},${opacity})`);
-    grad.addColorStop(1,`rgba(${hexToRgb(nb.color)},${opacity})`);
+    grad.addColorStop(0,`rgba(${hexToRgb(na.color)},${op})`);
+    grad.addColorStop(1,`rgba(${hexToRgb(nb.color)},${op})`);
     ctx.beginPath();ctx.moveTo(na.px,na.py);ctx.lineTo(nb.px,nb.py);
-    ctx.strokeStyle=grad;ctx.lineWidth=width;ctx.stroke();
-
+    ctx.strokeStyle=grad;ctx.lineWidth=ww;ctx.stroke();
     if(link.pulse>=0&&link.pulse<=1){
       link.pulse+=FLASH_PULSE_SPEED*(dt/16);
       const t=link.dir===1?link.pulse:1-link.pulse;
-      const SEG=0.18;
-      const t0=Math.max(0,t-SEG),t1=Math.min(1,t+SEG);
+      const SEG=0.18,t0=Math.max(0,t-SEG),t1=Math.min(1,t+SEG);
       const px0=na.px+(nb.px-na.px)*t0,py0=na.py+(nb.py-na.py)*t0;
       const px1=na.px+(nb.px-na.px)*t1,py1=na.py+(nb.py-na.py)*t1;
       const pxM=na.px+(nb.px-na.px)*t,pyM=na.py+(nb.py-na.py)*t;
+      const tc=typeColor(link.type);
       const gg=ctx.createLinearGradient(px0,py0,px1,py1);
       gg.addColorStop(0,`rgba(${hexToRgb(tc)},0)`);
       gg.addColorStop(.5,`rgba(${hexToRgb(tc)},${0.55+link.energy*0.35})`);
       gg.addColorStop(1,`rgba(${hexToRgb(tc)},0)`);
       ctx.beginPath();ctx.moveTo(px0,py0);ctx.lineTo(px1,py1);
-      ctx.strokeStyle=gg;ctx.lineWidth=width+3;ctx.stroke();
+      ctx.strokeStyle=gg;ctx.lineWidth=ww+3;ctx.stroke();
       ctx.beginPath();ctx.arc(pxM,pyM,2.2,0,Math.PI*2);
       ctx.fillStyle=tc;ctx.shadowColor=tc;ctx.shadowBlur=12;ctx.fill();ctx.shadowBlur=0;
       if(link.pulse>1)link.pulse=-1;
     }
   });
-
-  // ── nodes ─────────────────────────────────────────────────────────────────
+  // nodes
   projNodes.forEach(n=>{
     const r=n.size*n.pscale*.28,isCP=n.id==='cp',isH=hoveredNode===n.id;
     const grd=ctx.createRadialGradient(n.px,n.py,0,n.px,n.py,r*(isCP?4:3));
@@ -468,39 +440,40 @@ function draw(ts){
       if(isCP||isH){ctx.fillStyle='#ffffff44';ctx.font=`${Math.max(7,8*n.pscale)}px 'Share Tech Mono',monospace`;ctx.fillText(n.role,n.px,n.py-r-17);}
     }
   });
-
-  // ── demo fallback ─────────────────────────────────────────────────────────
-  if(!liveMode){
+  // demo fallback: se nessun evento live arriva entro 8s
+  if(Date.now()-lastEventTs > 8000){
     demoTimer+=dt;
     if(demoTimer>=demoNextIn){const rt=demoRoute();fireLink(rt.from,rt.to,'task');demoTimer=0;demoNextIn=200+Math.random()*500;}
+    if(!document.getElementById('conn-label').textContent.includes('demo')){
+      setConn('demo');
+      addLog('No live events — demo mode active','warn');
+    }
+  } else {
+    demoTimer=0;
   }
-
-  // ── HUD ───────────────────────────────────────────────────────────────────
-  tpsTimer+=dt;
-  if(tpsTimer>1000){tps=totalTasks-lastTotal;lastTotal=totalTasks;tpsTimer=0;}
+  // HUD
+  epsTimer+=dt;
+  if(epsTimer>1000){eps=totalEvents-lastTotal;lastTotal=totalEvents;epsTimer=0;}
   const el=Math.floor((Date.now()-startTime)/1000);
-  const hh=String(Math.floor(el/3600)).padStart(2,'0'),mm=String(Math.floor((el%3600)/60)).padStart(2,'0'),ss=String(el%60).padStart(2,'0');
-  document.getElementById('hdr-nodes').textContent=activeNodeCount||NODES.filter(n=>n.id!=='cp'&&n.id!=='reg').length;
-  document.getElementById('hdr-tps').textContent=tps;
+  const hh=String(Math.floor(el/3600)).padStart(2,'0'),mm2=String(Math.floor((el%3600)/60)).padStart(2,'0'),ss=String(el%60).padStart(2,'0');
+  document.getElementById('hdr-nodes').textContent=activeNodeCount||NODES.filter(n=>n.status==='active'&&n.id!=='cp'&&n.id!=='reg').length;
+  document.getElementById('hdr-tps').textContent=eps;
   document.getElementById('hdr-mem').textContent=Math.round(memEntries);
-  document.getElementById('ft-uptime').textContent=`${hh}:${mm}:${ss}`;
-  document.getElementById('ft-total').textContent=totalTasks.toLocaleString();
-  document.getElementById('ft-latency').textContent=`${Math.round(8+Math.random()*4)} ms`;
+  document.getElementById('ft-uptime').textContent=`${hh}:${mm2}:${ss}`;
+  document.getElementById('ft-total').textContent=totalEvents.toLocaleString();
   const mP=Math.round(memEntries/memMax*100);
   document.getElementById('mem-pct').textContent=mP+'%';
   document.getElementById('mem-bar').style.width=mP+'%';
-  const nMax=10, nP=Math.round((activeNodeCount||6)/nMax*100);
+  const nP=Math.round(Math.min(activeNodeCount||1,10)/10*100);
   document.getElementById('nodes-pct').textContent=nP+'%';
   document.getElementById('nodes-bar').style.width=nP+'%';
 }
-
-// ─── MOUSE ────────────────────────────────────────────────────────────────────
+// ── MOUSE ──────────────────────────────────────────────────────────────────────
 canvas.addEventListener('mousedown',e=>{isDragging=true;lastMX=e.clientX;lastMY=e.clientY;});
 window.addEventListener('mouseup',()=>isDragging=false);
 window.addEventListener('mousemove',e=>{
   if(isDragging){rotY+=(e.clientX-lastMX)*.005;rotX+=(e.clientY-lastMY)*.005;lastMX=e.clientX;lastMY=e.clientY;}
-  const ry=autoRotY+rotY,rx=rotX;
-  const pn=getProjectedNodes(ry,rx);
+  const ry=autoRotY+rotY,rx=rotX,pn=getPN(ry,rx);
   const tt=document.getElementById('tooltip');
   let found=null;
   for(const n of pn){const r=n.size*n.pscale*.28,dx=e.clientX-n.px,dy=e.clientY-n.py;if(Math.sqrt(dx*dx+dy*dy)<r*3){found=n;break;}}
@@ -510,15 +483,16 @@ window.addEventListener('mousemove',e=>{
     document.getElementById('tt-name').textContent=found.name;
     document.getElementById('tt-role').textContent=found.role;
     document.getElementById('tt-model').textContent=found.model;
-    document.getElementById('tt-status').textContent=found.id==='cp'||found.id==='reg'?'always-on':'active';
+    document.getElementById('tt-status').textContent=found.status||'unknown';
     document.getElementById('tt-ping').textContent=found.ping+'ms';
-    document.getElementById('tt-seen').textContent=found.lastSeen?new Date(found.lastSeen).toLocaleTimeString():'—';
+    document.getElementById('tt-seen').textContent=found.lastSeen?new Date(found.lastSeen).toLocaleTimeString('it-IT'):'—';
   }else{hoveredNode=null;tt.classList.remove('visible');}
 });
-
-// ─── BOOT ─────────────────────────────────────────────────────────────────────
-setTimeout(connectSSE, 500);
-setTimeout(()=>{ if(!liveMode){ addLog('Bridge offline — demo mode','warn'); startPolling(); }}, DEMO_MODE_DELAY);
+// intercept fireLink to update lastEventTs
+const _origFireLink=fireLink;
+window.fireLink=function(f,t,tp){lastEventTs=Date.now();_origFireLink(f,t,tp);};
+// ── BOOT ─────────────────────────────────────────────────────────────────────
+connectSSE();
 requestAnimationFrame(draw);
 </script>
 </body>
