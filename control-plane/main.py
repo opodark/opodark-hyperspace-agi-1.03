@@ -2,6 +2,7 @@
 # HyperSpace AGI v1.02 — Control Plane + Dashboard
 # feat: memory sync inter-nodo nell'heartbeat + smart task routing (tier/vram/load)
 # feat: memory compression — gzip + TTL/max-entries pruning
+# feat: OMEGA Obsidian bridge — /health + /mcp JSON-RPC 2.0
 
 from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
 import os, threading, time, requests, json, uuid, random, gzip
@@ -109,20 +110,233 @@ def _prune_memory(entries: list) -> list:
         except Exception:
             fresh.append(e)  # entry senza timestamp valido: la teniamo
 
-    # ordina per timestamp decrescente e tronca
     def _ts_key(e):
         return e.get("ts") or e.get("timestamp", "")
 
     fresh.sort(key=_ts_key, reverse=True)
     return fresh[:MEMORY_MAX_ENTRIES]
 
-# ── SMART TASK ROUTING ────────────────────────────────────────────────────────
-# Score un nodo per lo scheduling: considera tier, VRAM, peers attivi, uptime.
-# Tier:        root=3, hub=2, leaf=1  (peso 40%)
-# VRAM:        normalizzata su 24 GB  (peso 30%)
-# peers_active: normalizzato su 10    (peso 20%)
-# uptime_s:   normalizzato su 7gg     (peso 10%)
+# ── OMEGA BRIDGE — helpers ────────────────────────────────────────────────────
 
+def _omega_format_memories(entries: list) -> list:
+    """
+    Converte le entry HyperSpace nel formato OmegaMemory atteso dal plugin:
+    {content, event_type, created_at, project, priority, access_count, status}
+    """
+    out = []
+    for e in entries:
+        out.append({
+            "content":      str(e.get("content") or e.get("summary") or e.get("detail") or ""),
+            "event_type":   str(e.get("type") or e.get("event_type") or "memory"),
+            "created_at":   str(e.get("ts") or e.get("timestamp") or ""),
+            "project":      e.get("node_id") or e.get("sourceNode") or None,
+            "priority":     int(e.get("priority", 3)),
+            "access_count": int(e.get("access_count", 0)),
+            "status":       str(e.get("status") or "active"),
+        })
+    return out
+
+def _omega_query(args: dict) -> str:
+    """
+    omega_query: cerca nelle entry di memoria per keyword (query) e/o event_type.
+    Risponde in formato Markdown leggibile dal plugin.
+    """
+    query      = str(args.get("query", "")).lower()
+    limit      = int(args.get("limit", 10))
+    event_type = str(args.get("event_type", "")).lower()
+    mode       = str(args.get("mode", "semantic"))
+
+    entries = _load_memory()
+    results = []
+    for e in entries:
+        content = str(e.get("content") or e.get("summary") or e.get("detail") or "").lower()
+        etype   = str(e.get("type") or e.get("event_type") or "memory").lower()
+
+        if event_type and event_type not in etype:
+            continue
+        if mode == "browse" or not query:
+            results.append(e)
+        else:
+            # match semplice per keyword (nessun embedding: SLM-friendly)
+            if query in content:
+                results.append(e)
+
+    results = results[:limit]
+    if not results:
+        return "No memories found matching the query."
+
+    lines = []
+    for m in _omega_format_memories(results):
+        lines.append(
+            f"[{m['event_type']}] {m['created_at']}\n"
+            f"{m['content'][:300]}\n"
+            f"project: {m['project'] or 'hyperspace-agi'}\n---"
+        )
+    return "\n".join(lines)
+
+def _omega_store(args: dict) -> str:
+    """
+    omega_store: aggiunge una nuova entry di memoria (da Obsidian vault) al file gzip.
+    """
+    content    = str(args.get("content", "")).strip()
+    if not content:
+        return "Error: content is required."
+
+    metadata   = args.get("metadata") or {}
+    event_type = str(args.get("event_type") or metadata.get("event_type") or "vault_note")
+    entry = {
+        "ts":         datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "type":       event_type,
+        "content":    content,
+        "source":     str(metadata.get("source", "obsidian-vault")),
+        "plugin":     str(metadata.get("plugin", "omega-memory")),
+        "status":     "active",
+        "priority":   int(metadata.get("priority", 3)),
+        "access_count": 0,
+    }
+    entries = _load_memory()
+    entries.append(entry)
+    _save_memory(entries)
+    push_log('memory_sync', f'OMEGA store: vault note ingested',
+             detail=f'chars={len(content)} event_type={event_type}', status='success')
+    return f"Stored: {content[:80]}..."
+
+def _omega_reflect(args: dict) -> str:
+    """
+    omega_reflect: action='contradictions' — trova coppie con contenuto simile
+    ma event_type diverso (proxy leggero senza embedding).
+    """
+    action = str(args.get("action", "contradictions"))
+    entries = _load_memory()
+    if action != "contradictions" or len(entries) < 2:
+        return "No contradictions detected."
+
+    # Matching semplice: raggruppa per prime 3 parole del contenuto
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
+    for e in entries:
+        words = str(e.get("content") or "").lower().split()[:3]
+        key   = " ".join(words)
+        if key:
+            groups[key].append(e)
+
+    contradictions = []
+    for key, group in groups.items():
+        if len(group) < 2:
+            continue
+        types = {str(g.get("type") or g.get("event_type", "")) for g in group}
+        if len(types) > 1:
+            a, b = group[0], group[1]
+            contradictions.append(
+                f"Potential contradiction on topic '{key}':\n"
+                f"  A [{a.get('type','?')}]: {str(a.get('content',''))[:150]}\n"
+                f"  B [{b.get('type','?')}]: {str(b.get('content',''))[:150]}\n---"
+            )
+
+    if not contradictions:
+        return "No contradictions detected."
+    return f"Found {len(contradictions)} potential contradiction(s):\n\n" + "\n".join(contradictions[:10])
+
+def _omega_stats(args: dict) -> str:
+    entries    = _load_memory()
+    size_bytes = os.path.getsize(MEMORY_FILE_GZ) if os.path.exists(MEMORY_FILE_GZ) else 0
+    nodes_active = len([n for n in _node_list() if n.get("status") == "active"])
+    return (
+        f"memories: {len(entries)}\n"
+        f"max_entries: {MEMORY_MAX_ENTRIES}\n"
+        f"ttl_days: {MEMORY_TTL_DAYS}\n"
+        f"file_size_kb: {round(size_bytes / 1024, 2)}\n"
+        f"mesh_nodes_active: {nodes_active}\n"
+        f"engine: hyperspace-agi v1.02"
+    )
+
+# ── OMEGA BRIDGE — endpoints ──────────────────────────────────────────────────
+
+@app.route('/health')
+def omega_health():
+    """
+    Endpoint rilevamento OMEGA. Il plugin cerca GET /health e si aspetta
+    {"status": "ok", ...}. Porta default OMEGA: 8377; qui gira su 8085.
+    Configurare OMEGA_HTTP_URL=http://localhost:8085 in omega-bridge.ts
+    oppure nel docker-compose come variabile env del container host.
+    """
+    entries      = _load_memory()
+    nodes_active = len([n for n in _node_list() if n.get("status") == "active"])
+    return jsonify({
+        "status":       "ok",
+        "engine":       "hyperspace-agi",
+        "version":      "1.02",
+        "memories":     len(entries),
+        "nodes_active": nodes_active,
+        "ttl_days":     MEMORY_TTL_DAYS,
+        "ts":           datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    })
+
+@app.route('/mcp', methods=['POST'])
+def omega_mcp():
+    """
+    MCP over HTTP — JSON-RPC 2.0 compatibile con omega-bridge.ts.
+
+    Il plugin invia:
+      {jsonrpc: '2.0', method: 'tools/call',
+       params: {name: 'omega_call', arguments: {tool: 'omega_query', args: {...}}},
+       id: <number>}
+
+    Rispondiamo:
+      {jsonrpc: '2.0', result: {content: [{type: 'text', text: '...'}]}, id: <id>}
+    """
+    payload = request.get_json(force=True, silent=True) or {}
+    rpc_id  = payload.get("id", 1)
+
+    def _ok(text: str):
+        return jsonify({
+            "jsonrpc": "2.0",
+            "result":  {"content": [{"type": "text", "text": text}]},
+            "id":      rpc_id,
+        })
+
+    def _err(msg: str, code: int = -32600):
+        return jsonify({
+            "jsonrpc": "2.0",
+            "error":   {"code": code, "message": msg},
+            "id":      rpc_id,
+        }), 400
+
+    method = payload.get("method", "")
+    if method != "tools/call":
+        return _err(f"Unsupported method: {method}")
+
+    params    = payload.get("params") or {}
+    tool_name = params.get("name", "")
+    arguments = params.get("arguments") or {}
+
+    # Il plugin usa sempre name='omega_call' con tool interno in arguments
+    if tool_name == "omega_call":
+        inner_tool = str(arguments.get("tool", ""))
+        inner_args = arguments.get("args") or {}
+    else:
+        # supporto chiamata diretta (es. omega_stats)
+        inner_tool = tool_name
+        inner_args = arguments
+
+    _TOOLS = {
+        "omega_query":   _omega_query,
+        "omega_store":   _omega_store,
+        "omega_reflect": _omega_reflect,
+        "omega_stats":   _omega_stats,
+    }
+
+    handler = _TOOLS.get(inner_tool)
+    if not handler:
+        return _err(f"Unknown tool: {inner_tool}", -32601)
+
+    try:
+        result_text = handler(inner_args)
+        return _ok(result_text)
+    except Exception as exc:
+        return _err(str(exc), -32603)
+
+# ── SMART TASK ROUTING ────────────────────────────────────────────────────────
 _TIER_SCORE = {"root": 3, "hub": 2, "leaf": 1}
 
 def _node_score(node: dict) -> float:
@@ -133,25 +347,16 @@ def _node_score(node: dict) -> float:
     return tier_s * 0.40 + vram_s * 0.30 + peers_s * 0.20 + uptime_s * 0.10
 
 def _select_best_node(active_nodes: list) -> dict:
-    """Ritorna il nodo con score più alto; fallback al primo disponibile."""
     if not active_nodes:
         return None
     return max(active_nodes, key=_node_score)
 
-# ── MODELLI: helper unificato Ollama / LM Studio ────────────────────────────────
+# ── MODELLI: helper unificato Ollama / LM Studio ─────────────────────────────
 def _fetch_models():
-    """
-    Ritorna lista di nomi modello indipendentemente dal backend.
-    - Ollama:    GET /api/tags   -> {"models": [{"name": ...}]}
-    - LM Studio: GET /v1/models  -> {"data":   [{"id":   ...}]}
-    Rileva automaticamente il formato dalla risposta JSON.
-    """
     url     = advanced_config["ollama"]["url"].rstrip("/")
     backend = INFERENCE_BACKEND
     models  = []
     errors  = []
-
-    # Prova Ollama-style (/api/tags)
     try:
         r = requests.get(f"{url}/api/tags", timeout=4)
         if r.status_code == 200:
@@ -161,8 +366,6 @@ def _fetch_models():
                 return {"ok": True, "backend": "ollama", "url": url, "models": models}
     except Exception as e:
         errors.append(f"ollama-style: {e}")
-
-    # Prova LM Studio / OpenAI-style (/v1/models)
     try:
         r = requests.get(f"{url}/v1/models", timeout=4)
         if r.status_code == 200:
@@ -172,7 +375,6 @@ def _fetch_models():
                 return {"ok": True, "backend": "lmstudio", "url": url, "models": models}
     except Exception as e:
         errors.append(f"lmstudio-style: {e}")
-
     return {"ok": False, "url": url, "backend": backend, "models": [], "errors": errors}
 
 
@@ -299,7 +501,6 @@ def mesh_topology():
     nodes_out = []
     edges_out = []
     seen_edges = set()
-
     for nid, node in _nodes_by_id.items():
         nodes_out.append({
             "id":           nid,
@@ -328,21 +529,17 @@ def mesh_topology():
                     })
         except Exception:
             pass
-
     return jsonify({"nodes": nodes_out, "edges": edges_out})
 
 @app.route('/mesh/node/<path:endpoint>/pull', methods=['POST'])
 def node_pull_model(endpoint):
     data  = request.get_json(force=True, silent=True) or {}
     model = data.get("model", advanced_config["ollama"]["defaultModel"])
-
     def generate():
         try:
             with requests.post(
                 f"{_ep_to_url(endpoint)}/ollama/pull",
-                json={"model": model},
-                stream=True,
-                timeout=600,
+                json={"model": model}, stream=True, timeout=600,
             ) as resp:
                 for line in resp.iter_lines():
                     if line:
@@ -350,7 +547,6 @@ def node_pull_model(endpoint):
             yield "data: {\"status\":\"done\"}\n\n"
         except Exception as e:
             yield f"data: {{\"error\": \"{e}\"}}\n\n"
-
     return Response(
         stream_with_context(generate()),
         mimetype="text/event-stream",
@@ -457,24 +653,19 @@ def assign_task():
     task_id = data.get('task_id')
     if not task_id or task_id not in tasks:
         return jsonify({"error": "Task not found"}), 404
-
     active = [n for n in _node_list() if n.get("status") == "active"]
     if not active:
         return jsonify({"error": "No active nodes"}), 503
-
-    # ── Smart routing: seleziona il nodo con score più alto ──
     selected = _select_best_node(active)
     endpoint = _best_endpoint(selected)
     node_id  = selected["node_id"]
     score    = round(_node_score(selected), 3)
-
     task = tasks[task_id]
-    task["status"]   = "assigned"
-    task["node"]     = node_id
-    task["endpoint"] = endpoint
+    task["status"]        = "assigned"
+    task["node"]          = node_id
+    task["endpoint"]      = endpoint
     task["routing_score"] = score
     db.update_task(task_id, "assigned", node_id=node_id, endpoint=endpoint)
-
     tid = str(uuid.uuid4())[:8]
     push_log('inter_node_message', f'Task {task_id} -> {node_id[:12]}',
              f'endpoint={endpoint} score={score} tier={selected.get("tier","?")} vram={selected.get("vram_gb","?")}GB',
@@ -505,28 +696,20 @@ def get_tasks():
 
 @app.route('/memory')
 def get_memory():
-    """Ritorna le entry di memoria locali (post-pruning)."""
-    limit = int(request.args.get("limit", MEMORY_MAX_ENTRIES))
+    limit   = int(request.args.get("limit", MEMORY_MAX_ENTRIES))
     entries = _load_memory()
     return jsonify({"entries": entries[:limit], "total": len(entries)})
 
 @app.route('/memory/push', methods=['POST'])
 def push_memory():
-    """
-    Riceve una entry di memoria da un altro nodo e la persiste localmente
-    nel file gzip (con pruning automatico).
-    Body atteso: {"node_id": "...", "entry": {...}}
-    """
     data  = request.get_json(force=True, silent=True) or {}
     entry = data.get("entry")
     if not entry or not isinstance(entry, dict):
         return jsonify({"ok": False, "error": "missing entry"}), 400
-
-    entries = _load_memory()
-    # evita duplicati: confronta su ts + content hash
-    ts_key = entry.get("ts") or entry.get("timestamp", "")
+    entries     = _load_memory()
+    ts_key      = entry.get("ts") or entry.get("timestamp", "")
     content_key = str(entry.get("content", ""))[:64]
-    dedup_key = f"{ts_key}:{content_key}"
+    dedup_key   = f"{ts_key}:{content_key}"
     existing_keys = {
         f"{e.get('ts') or e.get('timestamp','')}:{str(e.get('content',''))[:64]}"
         for e in entries
@@ -534,37 +717,27 @@ def push_memory():
     if dedup_key not in existing_keys:
         entries.append(entry)
         _save_memory(entries)
-
     return jsonify({"ok": True})
 
 @app.route('/memory/stats')
 def memory_stats():
-    """Statistiche sul file memoria: dimensione compressa, n. entry, TTL config."""
-    entries = _load_memory()
+    entries    = _load_memory()
     size_bytes = os.path.getsize(MEMORY_FILE_GZ) if os.path.exists(MEMORY_FILE_GZ) else 0
     return jsonify({
-        "entries":          len(entries),
-        "max_entries":      MEMORY_MAX_ENTRIES,
-        "ttl_days":         MEMORY_TTL_DAYS,
-        "file_size_bytes":  size_bytes,
-        "file_size_kb":     round(size_bytes / 1024, 2),
-        "file":             MEMORY_FILE_GZ,
+        "entries":         len(entries),
+        "max_entries":     MEMORY_MAX_ENTRIES,
+        "ttl_days":        MEMORY_TTL_DAYS,
+        "file_size_bytes": size_bytes,
+        "file_size_kb":    round(size_bytes / 1024, 2),
+        "file":            MEMORY_FILE_GZ,
     })
 
 # ── MEMORY SYNC ───────────────────────────────────────────────────────────────
 def _sync_memory_across_nodes():
-    """
-    Raccoglie le ultime 30 entry di memoria da ogni nodo attivo e propaga
-    quelle "straniere" agli altri nodi. Usa _synced_memory_keys per evitare
-    re-push di entry già sincronizzate.
-    Le entry ricevute vengono anche persistite localmente nel file gzip.
-    """
     active_nodes = [n for n in _node_list() if n.get("status") == "active"]
     if len(active_nodes) < 2:
-        return  # Niente da sincronizzare con un solo nodo
-
-    # Fase 1: raccolta
-    node_memories: dict = {}  # node_id -> [entries]
+        return
+    node_memories: dict = {}
     for node in active_nodes:
         ep  = _best_endpoint(node)
         nid = node.get("node_id", "")
@@ -574,15 +747,11 @@ def _sync_memory_across_nodes():
                 node_memories[nid] = r.json().get("entries", [])
         except Exception:
             pass
-
     if not node_memories:
         return
-
-    # Fase 2: propagazione + persistenza locale
     pushed_total  = 0
     local_entries = _load_memory()
     local_changed = False
-
     for src_nid, entries in node_memories.items():
         for entry in entries:
             ts  = entry.get("ts") or entry.get("timestamp", "")
@@ -590,8 +759,6 @@ def _sync_memory_across_nodes():
             if key in _synced_memory_keys:
                 continue
             _synced_memory_keys.add(key)
-
-            # Persiste in locale (con dedup semplice)
             content_key = str(entry.get("content", ""))[:64]
             dedup_key   = f"{ts}:{content_key}"
             existing_k  = {
@@ -601,8 +768,6 @@ def _sync_memory_across_nodes():
             if dedup_key not in existing_k:
                 local_entries.append(entry)
                 local_changed = True
-
-            # Invia l'entry a tutti i nodi che NON sono la sorgente
             for dst_node in active_nodes:
                 dst_nid = dst_node.get("node_id", "")
                 if dst_nid == src_nid:
@@ -617,10 +782,8 @@ def _sync_memory_across_nodes():
                     pushed_total += 1
                 except Exception:
                     pass
-
     if local_changed:
         _save_memory(local_entries)
-
     if pushed_total > 0:
         push_log(
             'memory_sync',
@@ -682,19 +845,14 @@ def heartbeat_loop():
         cycle = hb_state["cycle"] + 1
         hb_state["cycle"]     = cycle
         hb_state["last_tick"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-
         _poll_mesh_nodes()
-
         hb_state["nodes_seen"] = [
             n.get("node_id", n.get("endpoint", "?"))[:12]
             for n in _node_list() if n.get("status") == "active"
         ]
-
-        # ── Memory sync: ogni 2 cicli (ogni ~30s) ──
         if cycle % 2 == 0:
             _sync_memory_across_nodes()
             hb_state["last_memory_sync"] = hb_state["last_tick"]
-
         for node in _node_list():
             if node.get("status") != "active":
                 continue
@@ -712,14 +870,12 @@ def heartbeat_loop():
             except Exception as e:
                 push_log('connection_test', f'HB#{cycle} ping FAILED -> {nid}',
                          str(e), source='control-plane', target=nid, status='failed', trace_id=tid)
-
         if cycle % 3 == 0:
             pool = [n.get("node_id", "node-sim")[:16] for n in _node_list()] or ["node-sim"]
             nid  = random.choice(pool)
             push_log('dream', f'{nid}: {random.choice(DREAM_PHRASES).format(random.randint(1, 99))}',
                      f'cycle={cycle}', source=nid, status='info')
             hb_state["last_dream"] = hb_state["last_tick"]
-
         if cycle % 5 == 0:
             real_ids = [n.get("node_id", "")[:16] for n in _node_list() if n.get("node_id")]
             sim_pool = ["node-sim-A", "node-sim-B", "node-sim-C"]
@@ -736,7 +892,6 @@ def heartbeat_loop():
             push_log('node_chat', f'{dst} -> {src}: "{answer}"', 'reply',
                      source=dst, target=src, status='info', trace_id=tid)
             hb_state["last_chat"] = hb_state["last_tick"]
-
         time.sleep(15)
 
 # DASHBOARD
