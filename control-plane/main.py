@@ -6,9 +6,10 @@
 # feat: OMEGA Obsidian bridge — /health + /mcp JSON-RPC 2.0
 # fix: DB reload al boot, status recovery, endpoint dedup
 # fix: /tasks ora legge da DB (storico persiste tra restart)
+# fix: removed fake dream/node_chat simulation — only real events on dashboard
 
 from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
-import os, threading, time, requests, json, uuid, random, gzip
+import os, threading, time, requests, json, uuid, gzip
 from datetime import datetime, timedelta, timezone
 import sys
 
@@ -42,7 +43,7 @@ _synced_memory_keys: set = set()
 
 hb_state = {
     "cycle": 0, "last_tick": None, "last_conn": None,
-    "last_dream": None, "last_chat": None, "last_memory_sync": None,
+    "last_memory_sync": None,
     "nodes_seen": [], "running": False,
 }
 
@@ -136,7 +137,7 @@ def _load_tasks_from_db():
         tid = row.get("task_id", "")
         if not tid:
             continue
-        if tid not in tasks:          # non sovrascrivere task già in volo in RAM
+        if tid not in tasks:
             tasks[tid] = _db_row_to_task(row)
             loaded += 1
     print(f"[CP] Loaded {loaded} tasks from DB")
@@ -581,7 +582,7 @@ def _finalize_task(task, task_id, node_id, model, prompt, result_json):
     })
 
 # ── LOG ───────────────────────────────────────────────────────────────────────
-LOG_TYPES = {"connection_test", "inter_node_message", "dream", "node_chat", "system", "mesh_event", "memory_sync"}
+LOG_TYPES = {"connection_test", "inter_node_message", "system", "mesh_event", "memory_sync"}
 
 def push_log(type_, summary, detail="", source="control-plane", target="", status="info", trace_id=""):
     entry = {
@@ -910,7 +911,7 @@ def get_tasks():
     """
     db_rows = db.get_all_tasks()
     merged = {row["task_id"]: _db_row_to_task(row) for row in db_rows if row.get("task_id")}
-    merged.update(tasks)   # RAM sovrascrive: ha result/payload più ricchi
+    merged.update(tasks)
     return jsonify(merged)
 
 
@@ -1008,21 +1009,7 @@ def _sync_memory_across_nodes():
             "label": f"sync {pushed_total} entries"
         })
 
-# HEARTBEAT
-DREAM_PHRASES = [
-    "autonomous planning cycle initiated", "memory consolidation phase started",
-    "sub-task decomposition in progress", "latent space exploration #{}",
-    "tool-use reflection completed", "goal re-prioritization triggered",
-    "associative memory update: {} new links", "dream cycle #{} - context window cleared",
-]
-CHAT_PHRASES = [
-    ("can you handle a summarize task?", "yes, {} slots free"),
-    ("what is your current model?", "running {}"),
-    ("sync memory snapshot?", "snapshot ready - {} KB"),
-    ("queue depth?", "depth {} - capacity normal"),
-    ("ready for next task?", "ready, latency {}ms"),
-]
-
+# ── HEARTBEAT (solo eventi reali, zero simulazione) ───────────────────────────
 def _poll_mesh_nodes():
     for ep in list(_known_endpoints):
         try:
@@ -1064,14 +1051,19 @@ def heartbeat_loop():
         cycle = hb_state["cycle"] + 1
         hb_state["cycle"]     = cycle
         hb_state["last_tick"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
         _poll_mesh_nodes()
         hb_state["nodes_seen"] = [
             n.get("node_id", n.get("endpoint", "?"))[:12]
             for n in _node_list() if n.get("status") == "active"
         ]
+
+        # Memory sync ogni 2 cicli (30s)
         if cycle % 2 == 0:
             _sync_memory_across_nodes()
             hb_state["last_memory_sync"] = hb_state["last_tick"]
+
+        # Ping reale su ogni nodo attivo
         for node in _node_list():
             if node.get("status") != "active":
                 continue
@@ -1093,29 +1085,6 @@ def heartbeat_loop():
             except Exception as e:
                 push_log('connection_test', f'HB#{cycle} ping FAILED -> {nid}',
                          str(e), source='control-plane', target=nid, status='failed', trace_id=tid)
-        if cycle % 3 == 0:
-            pool = [n.get("node_id", "node-sim")[:16] for n in _node_list()] or ["node-sim"]
-            nid  = random.choice(pool)
-            dream_text = random.choice(DREAM_PHRASES).format(random.randint(1, 99))
-            push_log('dream', f'{nid}: {dream_text}',
-                     f'cycle={cycle}', source=nid, status='info')
-            hb_state["last_dream"] = hb_state["last_tick"]
-            _notify_bridge("dream", {"node": nid, "label": dream_text})
-        if cycle % 5 == 0:
-            real_ids  = [n.get("node_id", "")[:16] for n in _node_list() if n.get("node_id")]
-            sim_pool  = ["node-sim-A", "node-sim-B", "node-sim-C"]
-            pool      = list(dict.fromkeys(real_ids + sim_pool))
-            if len(pool) < 2:
-                pool = ["node-sim-A", "node-sim-B"]
-            src, dst  = random.sample(pool, 2)
-            q, a_tpl  = random.choice(CHAT_PHRASES)
-            answer    = a_tpl.format(random.randint(1, 8))
-            tid       = str(uuid.uuid4())[:8]
-            push_log('node_chat', f'{src} -> {dst}: "{q}"', f'cycle={cycle}',
-                     source=src, target=dst, status='info', trace_id=tid)
-            push_log('node_chat', f'{dst} -> {src}: "{answer}"', 'reply',
-                     source=dst, target=src, status='info', trace_id=tid)
-            hb_state["last_chat"] = hb_state["last_tick"]
 
         time.sleep(15)
 
