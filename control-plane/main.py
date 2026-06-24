@@ -4,12 +4,15 @@
 # feat: memory sync inter-nodo nell'heartbeat + smart task routing (tier/vram/load)
 # feat: memory compression — gzip + TTL/max-entries pruning
 # feat: OMEGA Obsidian bridge — /health + /mcp JSON-RPC 2.0
+# feat: CORS middleware for Open WebUI compatibility
 # fix: DB reload al boot, status recovery, endpoint dedup
 # fix: /tasks ora legge da DB (storico persiste tra restart)
 # fix: removed fake dream/node_chat simulation — only real events on dashboard
 # fix: _prune_memory sort key gestisce timestamp float (unix epoch) e stringa ISO
+# fix: SSE stream headers — Transfer-Encoding chunked, correct Content-Type
 
 from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
+from flask_cors import CORS
 import os, threading, time, requests, json, uuid, gzip
 from datetime import datetime, timedelta, timezone
 import sys
@@ -20,6 +23,9 @@ sys.path.insert(0, os.path.join(BASE_DIR, ".."))
 import shared.db as db
 
 app = Flask(__name__)
+
+# CORS — consente richieste da Open WebUI (e da qualsiasi origine in dev)
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
 
 # CONFIG
 NODE_ENDPOINTS     = [e.strip() for e in os.getenv("NODE_ENDPOINTS", "node:8084").split(",") if e.strip()]
@@ -104,7 +110,6 @@ def _load_nodes_from_db():
 
 
 def _db_row_to_task(row: dict) -> dict:
-    """Converte una riga DB tasks nel formato dict ricco usato dalla RAM cache."""
     prompt = row.get("prompt", "")
     model  = row.get("model", "")
     return {
@@ -131,7 +136,6 @@ def _try_parse_json(s):
 
 
 def _load_tasks_from_db():
-    """Popola la RAM cache con lo storico DB al boot. RAM wins su conflitti."""
     rows = db.get_all_tasks()
     loaded = 0
     for row in rows:
@@ -146,7 +150,6 @@ def _load_tasks_from_db():
 
 # ── TIMESTAMP HELPER ──────────────────────────────────────────────────────────
 def _ts_sort_key(entry: dict) -> float:
-    """Ritorna unix timestamp float per ordinamento — gestisce sia float che stringa ISO."""
     ts = entry.get("ts") or entry.get("timestamp")
     if ts is None:
         return 0.0
@@ -159,7 +162,6 @@ def _ts_sort_key(entry: dict) -> float:
 
 
 def _ts_to_iso(ts) -> str:
-    """Converte float (unix epoch) o stringa ISO → stringa ISO normalizzata."""
     if ts is None:
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     if isinstance(ts, (int, float)):
@@ -169,7 +171,6 @@ def _ts_to_iso(ts) -> str:
 
 # ── BRIDGE NOTIFY ─────────────────────────────────────────────────────────────
 def _notify_bridge(event_type: str, payload: dict):
-    """Fire-and-forget push to infra-ui bridge. Never blocks."""
     try:
         requests.post(
             f"{UI_BRIDGE_URL}/push/{event_type}",
@@ -208,13 +209,10 @@ def _prune_memory(entries: list) -> list:
                 fresh.append(e)
         except Exception:
             fresh.append(e)
-    # Ordinamento sicuro: usa sempre float unix timestamp come chiave
     fresh.sort(key=_ts_sort_key, reverse=True)
     return fresh[:MEMORY_MAX_ENTRIES]
 
 def _memory_append(entry: dict):
-    """Append entry to memory and save. Dedup by ts+content."""
-    # Normalizza sempre il timestamp a stringa ISO prima di salvare
     if "ts" not in entry and "timestamp" in entry:
         entry["ts"] = _ts_to_iso(entry["timestamp"])
     entries = _load_memory()
@@ -434,6 +432,16 @@ def _fetch_models():
         errors.append(f"lmstudio-style: {e}")
     return {"ok": False, "url": url, "backend": backend, "models": [], "errors": errors}
 
+# ── SSE HEADERS HELPER ────────────────────────────────────────────────────────
+def _sse_headers():
+    return {
+        "Content-Type":      "text/event-stream",
+        "Cache-Control":     "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+        "Transfer-Encoding": "chunked",
+        "Connection":        "keep-alive",
+    }
+
 # ── OPENAI-COMPATIBLE CHAT ENDPOINT ──────────────────────────────────────────
 @app.route('/v1/models')
 def v1_models():
@@ -447,8 +455,12 @@ def v1_models():
     return jsonify({"object": "list", "data": models_out})
 
 
-@app.route('/v1/chat/completions', methods=['POST'])
+@app.route('/v1/chat/completions', methods=['POST', 'OPTIONS'])
 def v1_chat_completions():
+    # Preflight CORS OPTIONS gestito da flask-cors, ma lo intercettiamo per sicurezza
+    if request.method == 'OPTIONS':
+        return '', 204
+
     data     = request.get_json(force=True, silent=True) or {}
     messages = data.get("messages", [])
     model    = data.get("model", advanced_config["ollama"]["defaultModel"])
@@ -501,7 +513,8 @@ def v1_chat_completions():
                         json=data, stream=True, timeout=120
                     ) as resp:
                         for chunk in resp.iter_content(chunk_size=None):
-                            yield chunk
+                            if chunk:
+                                yield chunk
                     task["status"] = "done"
                     task["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                     db.update_task(task_id, "done")
@@ -511,8 +524,10 @@ def v1_chat_completions():
                         "from": node_id[:12], "to": "cp",
                         "type": "task", "label": f"done: {prompt[:30]}"
                     })
-                return Response(_stream_from_node(), mimetype='text/event-stream',
-                                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+                return Response(
+                    stream_with_context(_stream_from_node()),
+                    headers=_sse_headers()
+                )
             else:
                 r = requests.post(f"{endpoint}/v1/chat/completions", json=data, timeout=120)
                 result_json = r.json()
@@ -538,7 +553,8 @@ def v1_chat_completions():
                 json=data, stream=True, timeout=180
             ) as resp:
                 for chunk in resp.iter_content(chunk_size=None):
-                    yield chunk
+                    if chunk:
+                        yield chunk
             task["status"] = "done"
             task["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             db.update_task(task_id, "done")
@@ -548,8 +564,10 @@ def v1_chat_completions():
                 "from": "n1", "to": "cp",
                 "type": "task", "label": "ollama done"
             })
-        return Response(_stream_ollama(), mimetype='text/event-stream',
-                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        return Response(
+            stream_with_context(_stream_ollama()),
+            headers=_sse_headers()
+        )
 
     try:
         r = requests.post(f"{ollama_base}/v1/chat/completions", json=data, timeout=180)
@@ -788,8 +806,8 @@ def node_pull_model(endpoint):
         except Exception as e:
             yield f'data: {{"error": "{e}"}}\n\n'
     return Response(
-        stream_with_context(generate()), mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        stream_with_context(generate()),
+        headers=_sse_headers(),
     )
 
 @app.route('/hb/status')
