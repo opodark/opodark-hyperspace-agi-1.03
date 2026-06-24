@@ -28,7 +28,7 @@
 # Memory Exporter: http://localhost:8090/status
 # Obsidian GUI:    http://localhost:8091   <- Obsidian nel browser (KasmVNC)
 #                  vault su Mac: ./data/obsidian-vault
-# Ollama Titler:   interno Docker (porta 11435 su Mac se serve debug)
+# Ollama Titler:   interno Docker (porta 11435 su Mac per debug)
 # ============================================================
 
 services:
@@ -85,8 +85,8 @@ services:
       start_period: 15s
 
   # -- Ollama Titler -- modello mini dedicato ai titoli memoria -------------------------
-  # Gira sempre (no profile), porta 11435 su Mac per debug, 11434 interno
-  # Auto-pull qwen2:0.5b al primo avvio, coesiste con Ollama nativo su :11434
+  # Porta 11435 su Mac per debug, 11434 interno alla rete Docker
+  # Il modello viene copiato da setup.sh (noob-friendly, no internet richiesta)
   ollama-titler:
     build:
       context: ./ollama-titler
@@ -101,15 +101,10 @@ services:
     networks:
       - hyperspace
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
-      interval: 20s
-      timeout: 10s
-      retries: 10
-      start_period: 60s
 
   # -- Memory Graph -- esporta memoria CP -> .md nel vault ------------------------------
-  # Titolatore: punta a ollama-titler interno (rete Docker, nessun host.docker.internal)
+  # Titolatore LLM via ollama-titler (rete interna Docker)
+  # Il titolatore fa retry silenzioso se qwen2 non e' ancora pronto
   # API: GET http://localhost:8090/status  GET /export  POST /export/force
   memory-graph:
     build:
@@ -117,10 +112,8 @@ services:
       dockerfile: Dockerfile
     container_name: hyperspace_memory_graph
     depends_on:
-      ollama-titler:
-        condition: service_healthy
-      control-plane:
-        condition: service_started
+      - ollama-titler
+      - control-plane
     ports:
       - "8090:8090"
     volumes:
