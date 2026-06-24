@@ -6,6 +6,7 @@
 # feat: memory compression — gzip + TTL/max-entries pruning
 # feat: OMEGA Obsidian bridge — /health + /mcp JSON-RPC 2.0
 # feat: CORS middleware for Open WebUI compatibility
+# fix: tool loop robusto — fallback no-tools se modello non supporta function calling
 # fix: _TOOL_HANDLERS definito dopo le funzioni omega (NameError fix)
 # fix: DB reload al boot, status recovery, endpoint dedup
 # fix: SSE stream headers
@@ -37,6 +38,29 @@ UI_BRIDGE_URL      = os.getenv("UI_BRIDGE_URL", "http://localhost:8099")
 MEMORY_FILE_GZ     = os.path.join(BASE_DIR, "memory.json.gz")
 MEMORY_TTL_DAYS    = int(os.getenv("MEMORY_TTL_DAYS", "7"))
 MEMORY_MAX_ENTRIES = int(os.getenv("MEMORY_MAX_ENTRIES", "200"))
+
+# Modelli che supportano function calling con Ollama.
+# Aggiungere nuovi modelli quando testati.
+# Impostare TOOL_CAPABLE_MODELS=* nel .env per abilitare su tutti (non consigliato).
+_TOOL_CAPABLE_OVERRIDE = os.getenv("TOOL_CAPABLE_MODELS", "")
+_TOOL_CAPABLE_PATTERNS = [
+    "qwen3", "qwen2.5", "llama3.1", "llama3.2", "llama3.3",
+    "mistral-nemo", "mistral-small", "mixtral",
+    "command-r", "firefunction", "functionary",
+    "hermes", "nexusraven", "gorilla",
+    "phi4",
+]
+
+def _model_supports_tools(model_name: str) -> bool:
+    """Restituisce True se il modello supporta function calling."""
+    if _TOOL_CAPABLE_OVERRIDE == "*":
+        return True
+    if _TOOL_CAPABLE_OVERRIDE:
+        for p in _TOOL_CAPABLE_OVERRIDE.split(","):
+            if p.strip().lower() in model_name.lower():
+                return True
+    m = model_name.lower().split(":")[0]  # ignora tag versione
+    return any(p in m for p in _TOOL_CAPABLE_PATTERNS)
 
 tasks: dict = {}
 _nodes_by_id: dict  = {}
@@ -422,18 +446,17 @@ def _tool_get_mesh_status(args: dict) -> str:
     return "\n".join(lines)
 
 # ── TOOL DEFINITIONS (OpenAI schema) ─────────────────────────────────────────
-# Definito DOPO le funzioni tool per evitare NameError
 BUILTIN_TOOLS = [
     {
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Cerca informazioni aggiornate sul web tramite DuckDuckGo. Usa quando hai bisogno di notizie recenti o fatti non presenti nella tua knowledge base.",
+            "description": "Cerca informazioni aggiornate sul web tramite DuckDuckGo.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "La query di ricerca"},
-                    "max_results": {"type": "integer", "description": "Numero massimo risultati (default 5, max 10)", "default": 5}
+                    "max_results": {"type": "integer", "default": 5}
                 },
                 "required": ["query"]
             }
@@ -443,13 +466,13 @@ BUILTIN_TOOLS = [
         "type": "function",
         "function": {
             "name": "omega_query",
-            "description": "Cerca nella memoria a lungo termine di HyperSpace AGI: conversazioni passate, note, eventi di sistema.",
+            "description": "Cerca nella memoria a lungo termine di HyperSpace AGI.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Testo da cercare nelle memorie"},
-                    "limit": {"type": "integer", "description": "Numero massimo risultati (default 10)", "default": 10},
-                    "event_type": {"type": "string", "description": "Filtra per tipo evento (es. webui_prompt, vault_note)"}
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "default": 10},
+                    "event_type": {"type": "string"}
                 },
                 "required": ["query"]
             }
@@ -459,12 +482,12 @@ BUILTIN_TOOLS = [
         "type": "function",
         "function": {
             "name": "omega_store",
-            "description": "Salva informazioni importanti nella memoria a lungo termine di HyperSpace AGI.",
+            "description": "Salva informazioni importanti nella memoria a lungo termine.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "content": {"type": "string", "description": "Il contenuto da salvare"},
-                    "event_type": {"type": "string", "description": "Tipo evento (default: vault_note)", "default": "vault_note"}
+                    "content": {"type": "string"},
+                    "event_type": {"type": "string", "default": "vault_note"}
                 },
                 "required": ["content"]
             }
@@ -474,20 +497,19 @@ BUILTIN_TOOLS = [
         "type": "function",
         "function": {
             "name": "get_mesh_status",
-            "description": "Restituisce lo stato attuale della rete HyperSpace: nodi attivi, modelli, heartbeat.",
+            "description": "Stato della rete HyperSpace: nodi attivi, modelli, heartbeat.",
             "parameters": {"type": "object", "properties": {}, "required": []}
         }
     }
 ]
 
-# ── TOOL DISPATCHER (definito DOPO tutte le funzioni tool) ────────────────────
+# ── TOOL DISPATCHER ───────────────────────────────────────────────────────────
 def _execute_tool_call(tool_name: str, tool_args) -> str:
     if isinstance(tool_args, str):
         try:
             tool_args = json.loads(tool_args)
         except Exception:
             tool_args = {}
-    # Lazy dispatch — le funzioni sono già definite a questo punto
     handlers = {
         "web_search":      _tool_web_search,
         "omega_query":     _omega_query,
@@ -503,24 +525,73 @@ def _execute_tool_call(tool_name: str, tool_args) -> str:
         return f"Errore esecuzione tool '{tool_name}': {e}"
 
 # ── TOOL CALLING LOOP (non-stream) ────────────────────────────────────────────
+def _call_ollama(ollama_base: str, payload: dict) -> dict:
+    """
+    Chiama Ollama e restituisce la risposta JSON.
+    In caso di risposta non-JSON (body vuoto, HTML di errore, ecc.)
+    rilancia ValueError con il testo grezzo per consentire il fallback.
+    """
+    r = requests.post(f"{ollama_base}/v1/chat/completions", json=payload, timeout=180)
+    raw = r.text.strip()
+    if not raw:
+        raise ValueError(f"Ollama ha restituito body vuoto (HTTP {r.status_code})")
+    try:
+        return r.json()
+    except Exception:
+        raise ValueError(f"Risposta non-JSON da Ollama (HTTP {r.status_code}): {raw[:200]}")
+
 def _run_tool_loop(data: dict, ollama_base: str, max_iterations: int = 5) -> dict:
-    messages     = list(data.get("messages", []))
+    """
+    Loop agentico tool-calling.
+    - Se il modello NON supporta function calling, fa inferenza diretta senza tools.
+    - Se la prima chiamata con tools fallisce (risposta non-JSON), riprova senza tools.
+    """
+    messages = list(data.get("messages", []))
+    model    = data.get("model", DEFAULT_MODEL)
+
+    supports_tools = _model_supports_tools(model)
+    push_log('system', f'tool_loop start: model={model} tools={supports_tools}', status='info')
+
+    # ── Caso 1: modello non supporta tools → inferenza diretta ────────────────
+    if not supports_tools:
+        payload = {**data, "messages": messages, "stream": False}
+        payload.pop("tools", None)  # rimuovi tools se il client li ha passati
+        try:
+            return _call_ollama(ollama_base, payload)
+        except Exception as e:
+            return {"error": {"message": str(e), "type": "server_error"}}
+
+    # ── Caso 2: modello supporta tools → loop agentico ───────────────────────
     client_tools = data.get("tools", [])
     client_names = {t["function"]["name"] for t in client_tools if t.get("function", {}).get("name")}
     all_tools    = client_tools + [t for t in BUILTIN_TOOLS if t["function"]["name"] not in client_names]
 
-    for _ in range(max_iterations):
+    last_resp = None
+    for iteration in range(max_iterations):
         payload = {**data, "messages": messages, "tools": all_tools, "stream": False}
         try:
-            r    = requests.post(f"{ollama_base}/v1/chat/completions", json=payload, timeout=180)
-            resp = r.json()
+            resp = _call_ollama(ollama_base, payload)
+        except ValueError as e:
+            # Risposta non-JSON: probabilmente il modello non regge i tools
+            # Fallback senza tools alla prima iterazione
+            push_log('system', f'tool_loop fallback no-tools: {str(e)[:120]}', status='warn')
+            if iteration == 0:
+                plain_payload = {**data, "messages": messages, "stream": False}
+                plain_payload.pop("tools", None)
+                try:
+                    return _call_ollama(ollama_base, plain_payload)
+                except Exception as e2:
+                    return {"error": {"message": str(e2), "type": "server_error"}}
+            return last_resp or {"error": {"message": str(e), "type": "server_error"}}
         except Exception as e:
             return {"error": {"message": str(e), "type": "server_error"}}
 
-        choice  = resp.get("choices", [{}])[0]
-        message = choice.get("message", {})
-        finish  = choice.get("finish_reason", "stop")
+        last_resp = resp
+        choice    = resp.get("choices", [{}])[0]
+        message   = choice.get("message", {})
+        finish    = choice.get("finish_reason", "stop")
 
+        # Nessun tool call → risposta finale
         if finish != "tool_calls" or not message.get("tool_calls"):
             return resp
 
@@ -535,7 +606,7 @@ def _run_tool_loop(data: dict, ollama_base: str, max_iterations: int = 5) -> dic
             push_log('system', f'tool_result: {tool_name}', detail=f'result={result[:120]}', status='success')
             messages.append({"role": "tool", "tool_call_id": tool_id, "content": result})
 
-    return resp
+    return last_resp
 
 # ── /v1/models ────────────────────────────────────────────────────────────────
 @app.route('/v1/models')
@@ -583,7 +654,7 @@ def v1_chat_completions():
     selected    = _select_best_node(active)
     ollama_base = advanced_config["ollama"]["url"].rstrip("/")
 
-    # ── STREAM: proxy diretto, tool loop non compatibile con SSE ──────────────
+    # ── STREAM ────────────────────────────────────────────────────────────────
     if stream:
         if selected:
             node_id  = selected.get("node_id", "cp")
@@ -596,10 +667,14 @@ def v1_chat_completions():
             db.update_task(task_id, "assigned", node_id="ollama-direct", endpoint=ollama_base)
             target_url = f"{ollama_base}/v1/chat/completions"
 
-        stream_data  = dict(data)
-        client_tools = stream_data.get("tools", [])
-        client_names = {t["function"]["name"] for t in client_tools if t.get("function", {}).get("name")}
-        stream_data["tools"] = client_tools + [t for t in BUILTIN_TOOLS if t["function"]["name"] not in client_names]
+        # In stream inietta tools solo se il modello li supporta
+        stream_data = dict(data)
+        if _model_supports_tools(model):
+            client_tools = stream_data.get("tools", [])
+            client_names = {t["function"]["name"] for t in client_tools if t.get("function", {}).get("name")}
+            stream_data["tools"] = client_tools + [t for t in BUILTIN_TOOLS if t["function"]["name"] not in client_names]
+        else:
+            stream_data.pop("tools", None)
 
         def _stream_gen():
             try:
@@ -623,7 +698,7 @@ def v1_chat_completions():
         node_id  = selected.get("node_id", "cp")
         endpoint = _best_endpoint(selected)
         task["node"] = node_id
-        db.update_task(task_id, "assigned", node_id=node_id, endpoint=_best_endpoint(selected))
+        db.update_task(task_id, "assigned", node_id=node_id, endpoint=endpoint)
         push_log('inter_node_message', f'task {task_id} -> {node_id[:12]}',
                  f'model={model}', source='webui', target=node_id[:12], status='pending')
         try:
@@ -710,10 +785,10 @@ def omega_mcp():
 # ── LOG ENDPOINTS ─────────────────────────────────────────────────────────────
 @app.route('/logs')
 def get_logs():
-    tf  = request.args.get('type', '')
-    sf  = request.args.get('status', '')
-    nf  = request.args.get('node', '')
-    q   = request.args.get('q', '').lower()
+    tf       = request.args.get('type', '')
+    sf       = request.args.get('status', '')
+    nf       = request.args.get('node', '')
+    q        = request.args.get('q', '').lower()
     page     = int(request.args.get('page', 1))
     per_page = int(request.args.get('per_page', 100))
     rows  = db.query_logs(type_=tf, status=sf, node=nf, q=q, page=page, per_page=per_page)
@@ -759,7 +834,7 @@ def mesh_announce():
     nid  = data.get("node_id", "")
     if not ep or not nid:
         return jsonify({"ok": False, "error": "missing endpoint or node_id"}), 400
-    existing     = _nodes_by_id.get(nid)
+    existing      = _nodes_by_id.get(nid)
     should_update = True
     if existing:
         existing_ep = _normalize_endpoint(existing.get("endpoint", ""))
@@ -786,16 +861,14 @@ def get_nodes_active():
 @app.route('/mesh/node/<path:endpoint>/status')
 def get_node_status(endpoint):
     try:
-        r = requests.get(f"{_ep_to_url(endpoint)}/status", timeout=3)
-        return jsonify(r.json())
+        return jsonify(requests.get(f"{_ep_to_url(endpoint)}/status", timeout=3).json())
     except Exception as e:
         return jsonify({"error": str(e)}), 503
 
 @app.route('/mesh/node/<path:endpoint>/peers')
 def get_node_peers(endpoint):
     try:
-        r = requests.get(f"{_ep_to_url(endpoint)}/peers", timeout=3)
-        return jsonify(r.json())
+        return jsonify(requests.get(f"{_ep_to_url(endpoint)}/peers", timeout=3).json())
     except Exception as e:
         return jsonify({"error": str(e)}), 503
 
@@ -811,8 +884,7 @@ def mesh_topology():
             r = requests.get(f"{_best_endpoint(node)}/peers", timeout=2)
             for peer in r.json().get("peers", []):
                 pid = peer.get("node_id","")
-                if not pid or pid == nid:
-                    continue
+                if not pid or pid == nid: continue
                 ek = tuple(sorted([nid, pid]))
                 if ek not in seen_edges:
                     seen_edges.add(ek)
@@ -829,8 +901,7 @@ def node_pull_model(endpoint):
         try:
             with requests.post(f"{_ep_to_url(endpoint)}/ollama/pull", json={"model": model}, stream=True, timeout=600) as resp:
                 for line in resp.iter_lines():
-                    if line:
-                        yield f"{line.decode()}\n\n"
+                    if line: yield f"{line.decode()}\n\n"
             yield 'data: {"status":"done"}\n\n'
         except Exception as e:
             yield f'data: {{"error": "{e}"}}\n\n'
@@ -880,10 +951,8 @@ def set_advanced_config():
         advanced_config['mesh']['nodeEndpoints'] = mesh['nodeEndpoints']
         for ep in mesh['nodeEndpoints']:
             _known_endpoints.add(_normalize_endpoint(ep))
-    if 'serverUrl' in auth:
-        advanced_config['_authority']['serverUrl'] = auth['serverUrl']
-    if 'enabled' in auth:
-        advanced_config['_authority']['enabled'] = bool(auth['enabled'])
+    if 'serverUrl' in auth: advanced_config['_authority']['serverUrl'] = auth['serverUrl']
+    if 'enabled'   in auth: advanced_config['_authority']['enabled']   = bool(auth['enabled'])
     push_log('system', 'Config updated', json.dumps(data, default=str))
     return jsonify({"ok": True})
 
@@ -936,8 +1005,8 @@ def assign_task():
     task.update({"status": "assigned", "node": node_id, "endpoint": endpoint, "routing_score": score})
     db.update_task(task_id, "assigned", node_id=node_id, endpoint=endpoint)
     tid = str(uuid.uuid4())[:8]
-    push_log('inter_node_message', f'Task {task_id} -> {node_id[:12]}',
-             f'score={score}', target=node_id[:12], status='pending', trace_id=tid)
+    push_log('inter_node_message', f'Task {task_id} -> {node_id[:12]}', f'score={score}',
+             target=node_id[:12], status='pending', trace_id=tid)
     _notify_bridge("task", {"from": "cp", "to": node_id[:12], "type": "task", "label": f'Task {task_id}'})
     try:
         r = requests.post(f"{endpoint}/execute", json=task, timeout=120)
@@ -1016,8 +1085,7 @@ def _sync_memory_across_nodes():
                 local_entries.append(entry)
                 local_changed = True
             for dst_node in active_nodes:
-                if dst_node.get("node_id") == src_nid:
-                    continue
+                if dst_node.get("node_id") == src_nid: continue
                 try:
                     requests.post(f"{_best_endpoint(dst_node)}/memory/push",
                                   json={"node_id": src_nid, "entry": entry}, timeout=4)
@@ -1075,8 +1143,7 @@ def heartbeat_loop():
             _sync_memory_across_nodes()
             hb_state["last_memory_sync"] = hb_state["last_tick"]
         for node in _node_list():
-            if node.get("status") != "active":
-                continue
+            if node.get("status") != "active": continue
             nid = node.get("node_id", node.get("endpoint","unknown"))[:12]
             ep  = _best_endpoint(node)
             tid = str(uuid.uuid4())[:8]
