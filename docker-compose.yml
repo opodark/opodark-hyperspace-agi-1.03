@@ -85,8 +85,6 @@ services:
       start_period: 15s
 
   # -- Ollama Titler -- modello mini dedicato ai titoli memoria -------------------------
-  # Porta 11435 su Mac per debug, 11434 interno alla rete Docker
-  # Il modello viene copiato da setup.sh (noob-friendly, no internet richiesta)
   ollama-titler:
     build:
       context: ./ollama-titler
@@ -102,10 +100,7 @@ services:
       - hyperspace
     restart: unless-stopped
 
-  # -- Memory Graph -- esporta memoria CP -> .md nel vault ------------------------------
-  # Titolatore LLM via ollama-titler (rete interna Docker)
-  # Il titolatore fa retry silenzioso se qwen2 non e' ancora pronto
-  # API: GET http://localhost:8090/status  GET /export  POST /export/force
+  # -- Memory Graph ---------------------------------------------------------------------
   memory-graph:
     build:
       context: ./memory-graph
@@ -131,8 +126,7 @@ services:
       - hyperspace
     restart: unless-stopped
 
-  # -- Obsidian (LinuxServer) -- GUI nel browser via KasmVNC ----------------------------
-  # http://localhost:8091  password: abc
+  # -- Obsidian -------------------------------------------------------------------------
   obsidian:
     image: lscr.io/linuxserver/obsidian:latest
     container_name: hyperspace_obsidian
@@ -154,7 +148,7 @@ services:
     restart: unless-stopped
     shm_size: "1gb"
 
-  # -- Ollama CPU (profile: cpu) ---------------------------------------------------------
+  # -- Ollama CPU -----------------------------------------------------------------------
   ollama:
     image: ollama/ollama:latest
     container_name: hyperspace_ollama
@@ -169,7 +163,7 @@ services:
     networks:
       - hyperspace
 
-  # -- Ollama NVIDIA GPU (profile: nvidia) -----------------------------------------------
+  # -- Ollama NVIDIA --------------------------------------------------------------------
   ollama-nvidia:
     image: ollama/ollama:latest
     container_name: hyperspace_ollama_nvidia
@@ -193,7 +187,7 @@ services:
     networks:
       - hyperspace
 
-  # -- Ollama AMD ROCm (profile: amd) ----------------------------------------------------
+  # -- Ollama AMD -----------------------------------------------------------------------
   ollama-amd:
     image: ollama/ollama:rocm
     container_name: hyperspace_ollama_amd
@@ -213,7 +207,7 @@ services:
     networks:
       - hyperspace
 
-  # -- Ollama Intel GPU (profile: intel) -------------------------------------------------
+  # -- Ollama Intel ---------------------------------------------------------------------
   ollama-intel:
     image: ollama/ollama:latest
     container_name: hyperspace_ollama_intel
@@ -233,7 +227,7 @@ services:
     networks:
       - hyperspace
 
-  # -- Ollama Vulkan GPU (profile: vulkan) -----------------------------------------------
+  # -- Ollama Vulkan --------------------------------------------------------------------
   ollama-vulkan:
     image: ollama/ollama:latest
     container_name: hyperspace_ollama_vulkan
@@ -253,9 +247,8 @@ services:
       - hyperspace
 
   # -- Open WebUI -----------------------------------------------------------------------
-  # TTS: Kokoro con voce italiana if_sara
-  # STT: Whisper locale con lingua italiana
-  # Per cambiare voce TTS: modifica AUDIO_TTS_VOICE (es. im_nicola per voce maschile)
+  # TTS/STT: Transformers.js locale nel browser
+  # Richiede COOP/COEP headers per SharedArrayBuffer (WebAssembly multi-thread)
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: hyperspace_open_webui
@@ -266,22 +259,31 @@ services:
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_URL:-http://host.docker.internal:1234}
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-hyperspace-secret-key-32chars-ok!}
-      # --- TTS: Kokoro italiano ---------------------------------------------------------
+      # --- TTS Kokoro italiano (fallback se Transformers non disponibile) ---------------
       AUDIO_TTS_ENGINE: "kokoro"
       AUDIO_TTS_VOICE: "${WEBUI_TTS_VOICE:-if_sara}"
       AUDIO_TTS_MODEL: "kokoro"
-      # --- STT: Whisper locale italiano -------------------------------------------------
+      # --- STT Whisper locale italiano --------------------------------------------------
       AUDIO_STT_ENGINE: "whisper"
       WHISPER_MODEL: "${WHISPER_MODEL:-base}"
       WHISPER_MODEL_AUTO_UPDATE: "false"
       AUDIO_STT_LANGUAGE: "it"
-      # --- Lingua UI --------------------------------------------------------------------
+      # --- Lingua UI -------------------------------------------------------------------
       DEFAULT_LOCALE: "it-IT"
+      # --- COOP/COEP headers: necessari per SharedArrayBuffer + Transformers.js ---------
+      # Abilita WebAssembly multi-thread nel browser (richiesto da Transformers.js TTS/STT)
+      WEBUI_CORS_ALLOW_ORIGINS: "*"
+      CORS_ALLOW_ORIGIN: "*"
+      ENABLE_FORWARD_USER_INFO_HEADERS: "true"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
       - hyperspace
     restart: unless-stopped
+    # Header COOP/COEP iniettati direttamente via label Traefik se presente,
+    # altrimenti Open WebUI li serve autonomamente con le var sopra.
+    labels:
+      - "traefik.enable=false"
 
   # -- Control Plane --------------------------------------------------------------------
   control-plane:
