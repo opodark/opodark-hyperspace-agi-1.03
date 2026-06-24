@@ -29,6 +29,10 @@
 # Obsidian GUI:    http://localhost:8091   <- Obsidian nel browser (KasmVNC)
 #                  vault su Mac: ./data/obsidian-vault
 # Ollama Titler:   interno Docker (porta 11435 su Mac per debug)
+#
+# TTS/STT: configurare dal pannello Admin -> Settings -> Audio
+#   TTS consigliato: Web API (voce sistema macOS, italiano nativo)
+#   STT consigliato: Web API (dettatura browser, italiano nativo)
 # ============================================================
 
 services:
@@ -84,7 +88,7 @@ services:
       retries: 3
       start_period: 15s
 
-  # -- Ollama Titler -- modello mini dedicato ai titoli memoria -------------------------
+  # -- Ollama Titler --------------------------------------------------------------------
   ollama-titler:
     build:
       context: ./ollama-titler
@@ -247,8 +251,9 @@ services:
       - hyperspace
 
   # -- Open WebUI -----------------------------------------------------------------------
-  # TTS/STT: Transformers.js locale nel browser
-  # Richiede COOP/COEP headers per SharedArrayBuffer (WebAssembly multi-thread)
+  # TTS/STT: NON configurare via env — usare Admin Panel -> Settings -> Audio
+  # Opzione consigliata su macOS: Web API (usa voci sistema, italiano disponibile)
+  # Opzione alternativa: piper-tts container esterno (vedi docker-compose aggiuntivo)
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: hyperspace_open_webui
@@ -259,31 +264,12 @@ services:
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_URL:-http://host.docker.internal:1234}
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-hyperspace-secret-key-32chars-ok!}
-      # --- TTS Kokoro italiano (fallback se Transformers non disponibile) ---------------
-      AUDIO_TTS_ENGINE: "kokoro"
-      AUDIO_TTS_VOICE: "${WEBUI_TTS_VOICE:-if_sara}"
-      AUDIO_TTS_MODEL: "kokoro"
-      # --- STT Whisper locale italiano --------------------------------------------------
-      AUDIO_STT_ENGINE: "whisper"
-      WHISPER_MODEL: "${WHISPER_MODEL:-base}"
-      WHISPER_MODEL_AUTO_UPDATE: "false"
-      AUDIO_STT_LANGUAGE: "it"
-      # --- Lingua UI -------------------------------------------------------------------
       DEFAULT_LOCALE: "it-IT"
-      # --- COOP/COEP headers: necessari per SharedArrayBuffer + Transformers.js ---------
-      # Abilita WebAssembly multi-thread nel browser (richiesto da Transformers.js TTS/STT)
-      WEBUI_CORS_ALLOW_ORIGINS: "*"
-      CORS_ALLOW_ORIGIN: "*"
-      ENABLE_FORWARD_USER_INFO_HEADERS: "true"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
       - hyperspace
     restart: unless-stopped
-    # Header COOP/COEP iniettati direttamente via label Traefik se presente,
-    # altrimenti Open WebUI li serve autonomamente con le var sopra.
-    labels:
-      - "traefik.enable=false"
 
   # -- Control Plane --------------------------------------------------------------------
   control-plane:
