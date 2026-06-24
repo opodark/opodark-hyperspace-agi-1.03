@@ -16,7 +16,7 @@
 #   POST /export/force
 
 import os, time, threading, json, re, hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import Flask, jsonify
 import requests
 
@@ -43,7 +43,18 @@ state = {
 }
 
 
-# ── Titolatore LLM ────────────────────────────────────────────────────────────
+# ── Helpers timestamp ───────────────────────────────────────────
+
+def _ts_to_iso(ts) -> str:
+    """Converte timestamp float (unix epoch) o stringa ISO in stringa ISO."""
+    if ts is None:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    if isinstance(ts, (int, float)):
+        return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    return str(ts)[:19]
+
+
+# ── Titolatore LLM ────────────────────────────────────────────
 
 def _load_title_cache():
     global _title_cache
@@ -65,7 +76,7 @@ def _save_title_cache():
 
 
 def _entry_hash(entry: dict) -> str:
-    key = str(entry.get("ts", "")) + str(entry.get("content", ""))[:100]
+    key = str(entry.get("ts") or entry.get("timestamp", "")) + str(entry.get("content") or entry.get("prompt", ""))[:100]
     return hashlib.md5(key.encode()).hexdigest()[:12]
 
 
@@ -109,11 +120,19 @@ def _call_llm_title(etype: str, content: str) -> str | None:
 
 def _get_title(entry: dict) -> str:
     etype   = entry.get("type") or entry.get("event_type") or "memory"
-    content = str(entry.get("content") or entry.get("summary") or entry.get("detail") or "")
-    ts      = (entry.get("ts") or "")[:16]
+    # Accetta sia 'content' che 'prompt'/'response' (formato nodo v1.02)
+    content = str(
+        entry.get("content")
+        or entry.get("prompt")
+        or entry.get("summary")
+        or entry.get("detail")
+        or ""
+    )
+    ts_raw  = entry.get("ts") or entry.get("timestamp", "")
+    ts_str  = _ts_to_iso(ts_raw)
 
     if not TITLER_ENABLED or not content.strip():
-        return f"[{etype}] {ts}"
+        return f"[{etype}] {ts_str}"
 
     h = _entry_hash(entry)
     if h in _title_cache:
@@ -121,7 +140,7 @@ def _get_title(entry: dict) -> str:
 
     title = _call_llm_title(etype, content)
     if not title or len(title) > 80:
-        title = f"[{etype}] {ts}"
+        title = f"[{etype}] {ts_str}"
 
     _title_cache[h] = title
     state["titles_generated"] += 1
@@ -129,7 +148,7 @@ def _get_title(entry: dict) -> str:
     return title
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────
 
 def _slugify(text: str) -> str:
     text = str(text).lower().strip()
@@ -139,9 +158,17 @@ def _slugify(text: str) -> str:
 
 
 def _entry_to_md(entry: dict) -> tuple[str, str]:
-    ts       = entry.get("ts") or entry.get("timestamp", "")
+    ts_raw   = entry.get("ts") or entry.get("timestamp")
+    ts_str   = _ts_to_iso(ts_raw)          # sempre stringa ISO
     etype    = entry.get("type") or entry.get("event_type") or "memory"
-    content  = str(entry.get("content") or entry.get("summary") or entry.get("detail") or "")
+    content  = str(
+        entry.get("content")
+        or entry.get("prompt")
+        or entry.get("summary")
+        or entry.get("detail")
+        or ""
+    )
+    response = str(entry.get("response") or "")
     node_id  = entry.get("node_id") or entry.get("sourceNode") or entry.get("source") or ""
     model    = entry.get("model", "")
     task_id  = entry.get("task_id", "")
@@ -149,7 +176,7 @@ def _entry_to_md(entry: dict) -> tuple[str, str]:
     status   = entry.get("status", "active")
 
     title    = _get_title(entry)
-    ts_slug  = _slugify(ts[:19]) if ts else _slugify(str(time.time()))
+    ts_slug  = _slugify(ts_str)            # slug dalla stringa ISO
     filename = f"{etype}_{ts_slug}.md"
 
     links = []
@@ -170,7 +197,7 @@ def _entry_to_md(entry: dict) -> tuple[str, str]:
         f"---\n"
         f"title: \"{title}\"\n"
         f"type: {etype}\n"
-        f"ts: {ts}\n"
+        f"ts: {ts_str}\n"
         f"node: {node_id}\n"
         f"model: {model}\n"
         f"task_id: {task_id}\n"
@@ -180,12 +207,17 @@ def _entry_to_md(entry: dict) -> tuple[str, str]:
         f"---\n"
     )
 
+    # Corpo nota: mostra prompt + response se presenti (formato nodo v1.02)
+    body = content
+    if response and response != content:
+        body = f"**Prompt:**\n{content}\n\n**Response:**\n{response}"
+
     links_section = "\n".join(links)
     md = (
         f"{frontmatter}\n"
         f"# {title}\n\n"
-        f"> `{etype}` — {ts[:19]} — `{node_id[:16]}`\n\n"
-        f"{content}\n\n"
+        f"> `{etype}` — {ts_str} — `{node_id[:16]}`\n\n"
+        f"{body}\n\n"
         + (f"## Links\n{links_section}\n" if links else "")
     )
     return filename, md
@@ -201,8 +233,8 @@ def _write_index(entries: list, vault: str):
         "| ts | type | node | title |",
         "|---|---|---|---|",
     ]
-    for e in sorted(entries, key=lambda x: x.get("ts") or "", reverse=True)[:200]:
-        ts    = (e.get("ts") or "")[:19]
+    for e in sorted(entries, key=lambda x: x.get("ts") or x.get("timestamp") or "", reverse=True)[:200]:
+        ts    = _ts_to_iso(e.get("ts") or e.get("timestamp"))
         etype = e.get("type") or e.get("event_type") or "memory"
         node  = (e.get("node_id") or e.get("source") or "")[:16]
         h     = _entry_hash(e)
@@ -213,7 +245,7 @@ def _write_index(entries: list, vault: str):
         f.write("\n".join(lines))
 
 
-# ── Export ────────────────────────────────────────────────────────────────────
+# ── Export ────────────────────────────────────────────────
 
 def do_export() -> dict:
     try:
@@ -260,7 +292,7 @@ def export_loop():
         time.sleep(EXPORT_INTERVAL)
 
 
-# ── API ───────────────────────────────────────────────────────────────────────
+# ── API ────────────────────────────────────────────────────
 
 @app.route("/status")
 def status():
