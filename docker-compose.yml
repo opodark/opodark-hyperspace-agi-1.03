@@ -253,6 +253,9 @@ services:
       - hyperspace
 
   # -- Open WebUI -----------------------------------------------------------------------
+  # TTS: Kokoro con voce italiana if_sara
+  # STT: Whisper locale con lingua italiana
+  # Per cambiare voce TTS: modifica AUDIO_TTS_VOICE (es. im_nicola per voce maschile)
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: hyperspace_open_webui
@@ -263,6 +266,17 @@ services:
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_URL:-http://host.docker.internal:1234}
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:-hyperspace-secret-key-32chars-ok!}
+      # --- TTS: Kokoro italiano ---------------------------------------------------------
+      AUDIO_TTS_ENGINE: "kokoro"
+      AUDIO_TTS_VOICE: "${WEBUI_TTS_VOICE:-if_sara}"
+      AUDIO_TTS_MODEL: "kokoro"
+      # --- STT: Whisper locale italiano -------------------------------------------------
+      AUDIO_STT_ENGINE: "whisper"
+      WHISPER_MODEL: "${WHISPER_MODEL:-base}"
+      WHISPER_MODEL_AUTO_UPDATE: "false"
+      AUDIO_STT_LANGUAGE: "it"
+      # --- Lingua UI --------------------------------------------------------------------
+      DEFAULT_LOCALE: "it-IT"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
