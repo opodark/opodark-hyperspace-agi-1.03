@@ -1,32 +1,22 @@
-# SearXNG settings for HyperSpace AGI
-# Abilita JSON API e motori principali
-# Ref: https://docs.searxng.org/admin/settings/
+# SearXNG — configurazione default per HyperSpace AGI
+# Questo file viene montato in /etc/searxng/settings.yml nel container.
+# NON richiede modifiche per il funzionamento di base.
+# Documentazione: https://docs.searxng.org/admin/settings/
 
 use_default_settings: true
 
 general:
   debug: false
-  instance_name: "HyperSpace Search"
+  instance_name: "HyperSpace AGI Search"
   privacypolicy_url: false
   donation_url: false
   contact_url: false
   enable_metrics: false
 
-server:
-  secret_key: "${SEARXNG_SECRET:-hyperspace-searxng-secret}"
-  limiter: false      # disabilita rate-limit (uso interno)
-  image_proxy: false
-  port: 8080
-  bind_address: "0.0.0.0"
-  base_url: false
-  public_instance: false
-
 ui:
-  static_use_hash: true
   default_locale: "it"
-  query_in_title: false
+  query_in_title: true
   infinite_scroll: false
-  results_on_new_tab: false
   default_theme: simple
 
 search:
@@ -37,39 +27,59 @@ search:
   max_ban_time_on_fail: 120
   formats:
     - html
-    - json   # necessario per l'API usata da control-plane
+    - json        # <-- indispensabile per il tool web_search del control-plane
 
+server:
+  port: 8080
+  bind_address: "0.0.0.0"
+  secret_key: "${SEARXNG_SECRET:-hyperspace-searxng-secret}"
+  base_url: false
+  image_proxy: false
+  http_protocol_version: "1.1"
+  method: "POST"
+  default_http_headers:
+    X-Content-Type-Options: nosniff
+    X-Download-Options: noopen
+    X-Robots-Tag: noindex, nofollow
+    Referrer-Policy: no-referrer
+
+outgoing:
+  request_timeout: 8.0
+  max_request_timeout: 15.0
+  pool_connections: 100
+  pool_maxsize: 20
+  enable_http2: true
+
+# Engine abilitati — aggiungi o rimuovi secondo necessità
 engines:
   - name: google
     engine: google
-    language: it
-    region: it-IT
     shortcut: g
-    timeout: 6.0
+    language: "it"
+    weight: 1
     disabled: false
 
   - name: bing
     engine: bing
-    language: it
-    region: it-IT
     shortcut: b
-    timeout: 6.0
+    weight: 1
     disabled: false
 
   - name: duckduckgo
     engine: duckduckgo
-    language: it
-    region: it-IT
     shortcut: ddg
-    timeout: 6.0
+    weight: 1
     disabled: false
 
   - name: wikipedia
     engine: wikipedia
-    language: it
     shortcut: wp
-    timeout: 4.0
+    base_url: "https://it.wikipedia.org/"
+    weight: 1
     disabled: false
 
-outpoints:
-  redis_url: false
+  - name: github
+    engine: github
+    shortcut: gh
+    weight: 1
+    disabled: false
