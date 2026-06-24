@@ -1,0 +1,75 @@
+# SearXNG settings for HyperSpace AGI
+# Abilita JSON API e motori principali
+# Ref: https://docs.searxng.org/admin/settings/
+
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "HyperSpace Search"
+  privacypolicy_url: false
+  donation_url: false
+  contact_url: false
+  enable_metrics: false
+
+server:
+  secret_key: "${SEARXNG_SECRET:-hyperspace-searxng-secret}"
+  limiter: false      # disabilita rate-limit (uso interno)
+  image_proxy: false
+  port: 8080
+  bind_address: "0.0.0.0"
+  base_url: false
+  public_instance: false
+
+ui:
+  static_use_hash: true
+  default_locale: "it"
+  query_in_title: false
+  infinite_scroll: false
+  results_on_new_tab: false
+  default_theme: simple
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "it-IT"
+  ban_time_on_fail: 5
+  max_ban_time_on_fail: 120
+  formats:
+    - html
+    - json   # necessario per l'API usata da control-plane
+
+engines:
+  - name: google
+    engine: google
+    language: it
+    region: it-IT
+    shortcut: g
+    timeout: 6.0
+    disabled: false
+
+  - name: bing
+    engine: bing
+    language: it
+    region: it-IT
+    shortcut: b
+    timeout: 6.0
+    disabled: false
+
+  - name: duckduckgo
+    engine: duckduckgo
+    language: it
+    region: it-IT
+    shortcut: ddg
+    timeout: 6.0
+    disabled: false
+
+  - name: wikipedia
+    engine: wikipedia
+    language: it
+    shortcut: wp
+    timeout: 4.0
+    disabled: false
+
+outpoints:
+  redis_url: false

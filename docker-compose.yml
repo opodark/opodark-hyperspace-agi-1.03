@@ -29,6 +29,7 @@
 # Obsidian GUI:    http://localhost:8091   <- Obsidian nel browser (KasmVNC)
 #                  vault su Mac: ./data/obsidian-vault
 # Ollama Titler:   interno Docker (porta 11435 su Mac per debug)
+# SearXNG:         http://localhost:8092  (web search engine self-hosted)
 #
 # TTS/STT: configurare dal pannello Admin -> Settings -> Audio
 #   TTS consigliato: Web API (voce sistema macOS, italiano nativo)
@@ -59,6 +60,36 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  # -- SearXNG (web search self-hosted) -------------------------------------------------
+  # Accessibile dal browser: http://localhost:8092
+  # Usato internamente da control-plane per il tool web_search
+  # Nessuna API key richiesta, nessun rate-limit esterno.
+  searxng:
+    image: searxng/searxng:latest
+    container_name: hyperspace_searxng
+    ports:
+      - "${SEARXNG_PORT:-8092}:8080"
+    volumes:
+      - ./data/searxng:/etc/searxng:rw
+    environment:
+      SEARXNG_BASE_URL: "http://localhost:${SEARXNG_PORT:-8092}/"
+      SEARXNG_SECRET: "${SEARXNG_SECRET:-hyperspace-searxng-secret}"
+    networks:
+      - hyperspace
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # -- Infra-UI Bridge ------------------------------------------------------------------
   bridge:
@@ -282,6 +313,8 @@ services:
         condition: service_healthy
       node-1:
         condition: service_started
+      searxng:
+        condition: service_started
     ports:
       - "8085:8085"
     environment:
@@ -294,6 +327,7 @@ services:
       INFERENCE_BACKEND: ${INFERENCE_BACKEND:-lmstudio}
       MEMORY_TTL_DAYS: "${MEMORY_TTL_DAYS:-7}"
       MEMORY_MAX_ENTRIES: "${MEMORY_MAX_ENTRIES:-200}"
+      SEARXNG_URL: "http://searxng:8080"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
