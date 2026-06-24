@@ -7,6 +7,7 @@
 # fix: DB reload al boot, status recovery, endpoint dedup
 # fix: /tasks ora legge da DB (storico persiste tra restart)
 # fix: removed fake dream/node_chat simulation — only real events on dashboard
+# fix: _prune_memory sort key gestisce timestamp float (unix epoch) e stringa ISO
 
 from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
 import os, threading, time, requests, json, uuid, gzip
@@ -143,6 +144,29 @@ def _load_tasks_from_db():
     print(f"[CP] Loaded {loaded} tasks from DB")
 
 
+# ── TIMESTAMP HELPER ──────────────────────────────────────────────────────────
+def _ts_sort_key(entry: dict) -> float:
+    """Ritorna unix timestamp float per ordinamento — gestisce sia float che stringa ISO."""
+    ts = entry.get("ts") or entry.get("timestamp")
+    if ts is None:
+        return 0.0
+    if isinstance(ts, (int, float)):
+        return float(ts)
+    try:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+
+def _ts_to_iso(ts) -> str:
+    """Converte float (unix epoch) o stringa ISO → stringa ISO normalizzata."""
+    if ts is None:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if isinstance(ts, (int, float)):
+        return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return str(ts)[:20]
+
+
 # ── BRIDGE NOTIFY ─────────────────────────────────────────────────────────────
 def _notify_bridge(event_type: str, payload: dict):
     """Fire-and-forget push to infra-ui bridge. Never blocks."""
@@ -174,24 +198,31 @@ def _prune_memory(entries: list) -> list:
     cutoff = datetime.now(timezone.utc) - timedelta(days=MEMORY_TTL_DAYS)
     fresh = []
     for e in entries:
-        ts_str = e.get("ts") or e.get("timestamp", "")
+        ts_val = e.get("ts") or e.get("timestamp")
         try:
-            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-            if ts >= cutoff:
+            if isinstance(ts_val, (int, float)):
+                ts_dt = datetime.fromtimestamp(float(ts_val), tz=timezone.utc)
+            else:
+                ts_dt = datetime.fromisoformat(str(ts_val).replace("Z", "+00:00"))
+            if ts_dt >= cutoff:
                 fresh.append(e)
         except Exception:
             fresh.append(e)
-    fresh.sort(key=lambda e: e.get("ts") or e.get("timestamp", ""), reverse=True)
+    # Ordinamento sicuro: usa sempre float unix timestamp come chiave
+    fresh.sort(key=_ts_sort_key, reverse=True)
     return fresh[:MEMORY_MAX_ENTRIES]
 
 def _memory_append(entry: dict):
     """Append entry to memory and save. Dedup by ts+content."""
+    # Normalizza sempre il timestamp a stringa ISO prima di salvare
+    if "ts" not in entry and "timestamp" in entry:
+        entry["ts"] = _ts_to_iso(entry["timestamp"])
     entries = _load_memory()
     ts_key      = entry.get("ts") or entry.get("timestamp", "")
-    content_key = str(entry.get("content", ""))[:64]
+    content_key = str(entry.get("content", "") or entry.get("prompt", ""))[:64]
     dedup_key   = f"{ts_key}:{content_key}"
     existing_keys = {
-        f"{e.get('ts') or e.get('timestamp','')}:{str(e.get('content',''))[:64]}"
+        f"{e.get('ts') or e.get('timestamp','')}:{str(e.get('content','') or e.get('prompt',''))[:64]}"
         for e in entries
     }
     if dedup_key not in existing_keys:
@@ -203,9 +234,9 @@ def _omega_format_memories(entries: list) -> list:
     out = []
     for e in entries:
         out.append({
-            "content":      str(e.get("content") or e.get("summary") or e.get("detail") or ""),
+            "content":      str(e.get("content") or e.get("summary") or e.get("detail") or e.get("prompt") or ""),
             "event_type":   str(e.get("type") or e.get("event_type") or "memory"),
-            "created_at":   str(e.get("ts") or e.get("timestamp") or ""),
+            "created_at":   _ts_to_iso(e.get("ts") or e.get("timestamp")),
             "project":      e.get("node_id") or e.get("sourceNode") or None,
             "priority":     int(e.get("priority", 3)),
             "access_count": int(e.get("access_count", 0)),
@@ -221,7 +252,7 @@ def _omega_query(args: dict) -> str:
     entries    = _load_memory()
     results    = []
     for e in entries:
-        content = str(e.get("content") or e.get("summary") or e.get("detail") or "").lower()
+        content = str(e.get("content") or e.get("prompt") or e.get("summary") or e.get("detail") or "").lower()
         etype   = str(e.get("type") or e.get("event_type") or "memory").lower()
         if event_type and event_type not in etype:
             continue
@@ -249,7 +280,7 @@ def _omega_store(args: dict) -> str:
     metadata   = args.get("metadata") or {}
     event_type = str(args.get("event_type") or metadata.get("event_type") or "vault_note")
     entry = {
-        "ts":           datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "ts":           datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "type":         event_type,
         "content":      content,
         "source":       str(metadata.get("source", "obsidian-vault")),
@@ -271,7 +302,7 @@ def _omega_reflect(args: dict) -> str:
     from collections import defaultdict
     groups: dict = defaultdict(list)
     for e in entries:
-        words = str(e.get("content") or "").lower().split()[:3]
+        words = str(e.get("content") or e.get("prompt") or "").lower().split()[:3]
         key   = " ".join(words)
         if key:
             groups[key].append(e)
@@ -284,8 +315,8 @@ def _omega_reflect(args: dict) -> str:
             a, b = group[0], group[1]
             contradictions.append(
                 f"Potential contradiction on topic '{key}':\n"
-                f"  A [{a.get('type','?')}]: {str(a.get('content',''))[:150]}\n"
-                f"  B [{b.get('type','?')}]: {str(b.get('content',''))[:150]}\n---"
+                f"  A [{a.get('type','?')}]: {str(a.get('content') or a.get('prompt',''))[:150]}\n"
+                f"  B [{b.get('type','?')}]: {str(b.get('content') or b.get('prompt',''))[:150]}\n---"
             )
     if not contradictions:
         return "No contradictions detected."
@@ -315,7 +346,7 @@ def omega_health():
         "memories":     len(entries),
         "nodes_active": nodes_active,
         "ttl_days":     MEMORY_TTL_DAYS,
-        "ts":           datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "ts":           datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     })
 
 @app.route('/mcp', methods=['POST'])
@@ -437,7 +468,7 @@ def v1_chat_completions():
         "id":         task_id,
         "status":     "created",
         "node":       None,
-        "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "payload":    {"prompt": prompt, "model": model, "source": "webui"},
     }
     tasks[task_id] = task
@@ -472,7 +503,7 @@ def v1_chat_completions():
                         for chunk in resp.iter_content(chunk_size=None):
                             yield chunk
                     task["status"] = "done"
-                    task["completed_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                    task["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                     db.update_task(task_id, "done")
                     push_log('inter_node_message', f'WebUI task {task_id} done (stream)',
                              source=node_id[:12], target='webui', status='success')
@@ -509,7 +540,7 @@ def v1_chat_completions():
                 for chunk in resp.iter_content(chunk_size=None):
                     yield chunk
             task["status"] = "done"
-            task["completed_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            task["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             db.update_task(task_id, "done")
             push_log('inter_node_message', f'WebUI task {task_id} done (ollama stream)',
                      source='ollama', target='webui', status='success')
@@ -543,10 +574,10 @@ def _finalize_task(task, task_id, node_id, model, prompt, result_json):
 
     task["status"]       = "done"
     task["result"]       = result_json
-    task["completed_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    task["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     db.update_task(task_id, "done", result=json.dumps(result_json))
 
-    ts_now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    ts_now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     _memory_append({
         "ts":      ts_now,
         "type":    "webui_prompt",
@@ -587,7 +618,7 @@ LOG_TYPES = {"connection_test", "inter_node_message", "system", "mesh_event", "m
 def push_log(type_, summary, detail="", source="control-plane", target="", status="info", trace_id=""):
     entry = {
         "id":         str(uuid.uuid4()),
-        "ts":         datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "ts":         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "type":       type_ if type_ in LOG_TYPES else "system",
         "sourceNode": source,
         "targetNode": target,
@@ -673,7 +704,7 @@ def mesh_announce():
             **data,
             "endpoint":  ep,
             "status":    "active",
-            "last_seen": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "last_seen": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
         _nodes_by_id[nid] = info
         _known_endpoints.add(ep)
@@ -800,7 +831,7 @@ def set_advanced_config():
     auth   = data.get('_authority', {})
     if 'sharedSecret' in sec and sec['sharedSecret'] not in ('', '***'):
         advanced_config['security']['sharedSecret']   = sec['sharedSecret']
-        advanced_config['security']['secretRotatedAt'] = datetime.utcnow().isoformat()
+        advanced_config['security']['secretRotatedAt'] = datetime.now(timezone.utc).isoformat()
     if 'url' in ollama:
         advanced_config['ollama']['url'] = ollama['url']
         OLLAMA_URL = ollama['url']
@@ -822,7 +853,7 @@ def set_advanced_config():
 def rotate_secret():
     new_secret = str(uuid.uuid4()).replace('-', '')
     advanced_config['security']['sharedSecret']   = new_secret
-    advanced_config['security']['secretRotatedAt'] = datetime.utcnow().isoformat()
+    advanced_config['security']['secretRotatedAt'] = datetime.now(timezone.utc).isoformat()
     push_log('system', 'Shared secret rotated', status='success')
     return jsonify({"ok": True, "secret": new_secret,
                     "rotatedAt": advanced_config['security']['secretRotatedAt']})
@@ -845,7 +876,7 @@ def create_task():
     model   = data.get('model', advanced_config['ollama']['defaultModel'])
     task = {
         "id": task_id, "status": "created", "node": None,
-        "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "payload": {"prompt": prompt, "model": model},
     }
     tasks[task_id] = task
@@ -884,7 +915,7 @@ def assign_task():
         r = requests.post(f"{endpoint}/execute", json=task, timeout=120)
         task["result"]       = r.json()
         task["status"]       = "done"
-        task["completed_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        task["completed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         db.update_task(task_id, "done", result=json.dumps(task["result"]))
         push_log('inter_node_message', f'Task {task_id} done',
                  json.dumps(task.get("result", {})),
@@ -905,10 +936,6 @@ def assign_task():
 
 @app.route('/tasks')
 def get_tasks():
-    """
-    Ritorna tutti i task: merge tra RAM (in-volo, più freschi) e DB (storico).
-    La RAM win in caso di conflitto sullo stesso task_id.
-    """
     db_rows = db.get_all_tasks()
     merged = {row["task_id"]: _db_row_to_task(row) for row in db_rows if row.get("task_id")}
     merged.update(tasks)
@@ -971,10 +998,10 @@ def _sync_memory_across_nodes():
             if key in _synced_memory_keys:
                 continue
             _synced_memory_keys.add(key)
-            content_key = str(entry.get("content", ""))[:64]
+            content_key = str(entry.get("content", "") or entry.get("prompt", ""))[:64]
             dedup_key   = f"{ts}:{content_key}"
             existing_k  = {
-                f"{e.get('ts') or e.get('timestamp','')}:{str(e.get('content',''))[:64]}"
+                f"{e.get('ts') or e.get('timestamp','')}:{str(e.get('content','') or e.get('prompt',''))[:64]}"
                 for e in local_entries
             }
             if dedup_key not in existing_k:
@@ -1009,7 +1036,7 @@ def _sync_memory_across_nodes():
             "label": f"sync {pushed_total} entries"
         })
 
-# ── HEARTBEAT (solo eventi reali, zero simulazione) ───────────────────────────
+# ── HEARTBEAT ─────────────────────────────────────────────────────────────────
 def _poll_mesh_nodes():
     for ep in list(_known_endpoints):
         try:
@@ -1019,7 +1046,7 @@ def _poll_mesh_nodes():
                 nid  = info.get("node_id", "")
                 info["endpoint"]  = ep
                 info["status"]    = "active"
-                info["last_seen"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                info["last_seen"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 if nid:
                     existing = _nodes_by_id.get(nid)
                     if not existing or \
@@ -1050,7 +1077,7 @@ def heartbeat_loop():
     while True:
         cycle = hb_state["cycle"] + 1
         hb_state["cycle"]     = cycle
-        hb_state["last_tick"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        hb_state["last_tick"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         _poll_mesh_nodes()
         hb_state["nodes_seen"] = [
@@ -1058,12 +1085,10 @@ def heartbeat_loop():
             for n in _node_list() if n.get("status") == "active"
         ]
 
-        # Memory sync ogni 2 cicli (30s)
         if cycle % 2 == 0:
             _sync_memory_across_nodes()
             hb_state["last_memory_sync"] = hb_state["last_tick"]
 
-        # Ping reale su ogni nodo attivo
         for node in _node_list():
             if node.get("status") != "active":
                 continue
@@ -1088,7 +1113,7 @@ def heartbeat_loop():
 
         time.sleep(15)
 
-# DASHBOARD (CP built-in)
+# DASHBOARD
 @app.route('/')
 def dashboard():
     return send_from_directory(BASE_DIR, 'dashboard.html')
