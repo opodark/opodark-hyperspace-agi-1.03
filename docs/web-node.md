@@ -39,6 +39,15 @@ The web node should:
 4. execute the small task locally,
 5. return the result to the control plane.
 
+## Control Plane Discovery
+
+The control plane exposes a clean machine-readable endpoint for web nodes and external tools (Lovable, browser clients, etc.):
+
+- `GET /api` → JSON discovery document with version, status and available endpoints
+- `GET /health` → detailed health + memory + active nodes
+
+This separation (`/` = human dashboard, `/api` = client discovery) keeps the architecture clean and CORS-friendly for browser-based nodes.
+
 ## Deployment modes
 
 ### Enterprise deployment
