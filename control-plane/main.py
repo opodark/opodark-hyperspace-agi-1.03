@@ -1,48 +1,30 @@
 # control-plane/main.py
-# HyperSpace AGI v1.03 — Control Plane
-# ... (resto del file invariato per ora)
+# ... (file invariato)
 
-# ── LOG ───────────────────────────────────────────────────────────────────────
-LOG_TYPES = {"connection_test", "inter_node_message", "system", "mesh_event", "memory_sync", "auth"}
+# ── MESH ──────────────────────────────────────────────────────────────────────
+@app.route('/mesh/announce', methods=['POST'])
+def mesh_announce():
+    _log_auth_headers(request, "register.request")
 
-def push_log(type_, summary, detail="", source="control-plane", target="", status="info", trace_id=""):
-    entry = {
-        "id":         str(uuid.uuid4()),
-        "ts":         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "type":       type_ if type_ in LOG_TYPES else "system",
-        "sourceNode": source,
-        "targetNode": target,
-        "status":     status,
-        "traceId":    trace_id or str(uuid.uuid4())[:8],
-        "summary":    summary,
-        "detail":     detail,
-    }
-    db.insert_log(entry)
-    return entry
-
-# Helper per logging header di autenticazione web-node
-def _log_auth_headers(request, action: str, extra: dict = None):
-    """Logga header x-hyperspace-* in modo strutturato per observability."""
-    headers = {
-        "node_id": request.headers.get("x-hyperspace-node-id"),
-        "install_id": request.headers.get("x-hyperspace-install-id"),
-        "session_id": request.headers.get("x-hyperspace-session-id"),
-        "ts": request.headers.get("x-hyperspace-ts"),
-        "nonce": request.headers.get("x-hyperspace-nonce"),
-        "client": request.headers.get("x-hyperspace-client"),
-        "sig": request.headers.get("x-hyperspace-sig"),
-    }
-    headers = {k: v for k, v in headers.items() if v}  # rimuovi None
-
-    if extra:
-        headers.update(extra)
-
-    push_log(
-        "auth",
-        f"{action}",
-        detail=json.dumps(headers, ensure_ascii=False),
-        source=headers.get("node_id", "web-node"),
-        status="info"
-    )
+    data = request.get_json(force=True, silent=True) or {}
+    ep   = _normalize_endpoint(data.get("endpoint", ""))
+    nid  = data.get("node_id", "")
+    if not ep or not nid:
+        return jsonify({"ok": False, "error": "missing endpoint or node_id"}), 400
+    existing      = _nodes_by_id.get(nid)
+    should_update = True
+    if existing:
+        existing_ep = _normalize_endpoint(existing.get("endpoint", ""))
+        if existing_ep.startswith("https://") and not ep.startswith("https://"):
+            should_update = False
+    if should_update:
+        info = {**data, "endpoint": ep, "status": "active",
+                "last_seen": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        _nodes_by_id[nid] = info
+        _known_endpoints.add(ep)
+        db.upsert_node(info)
+    push_log('mesh_event', f'Node announced: {nid[:12]}',
+             f'endpoint={ep} accepted={should_update}', source=nid[:12], status='success')
+    return jsonify({"ok": True, "registered": ep, "accepted": should_update})
 
 # (resto del file invariato)
