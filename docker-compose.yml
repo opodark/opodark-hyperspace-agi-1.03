@@ -1,39 +1,18 @@
 # ============================================================
-# HyperSpace AGI v1.02 — Compose Unico
+# HyperSpace AGI v1.03 — Compose Unico
 #
 # USAGE — scegli UN solo profilo GPU alla volta:
 #
-#   Nessun profilo (usa LM Studio o Ollama nativo sull'host):
-#     docker compose up -d
+#   docker compose up -d
 #
-#   Ollama CPU nel container:
-#     docker compose --profile cpu up -d
+#   Ollama CPU:     docker compose --profile cpu up -d
+#   Ollama NVIDIA:  docker compose --profile nvidia up -d
 #
-#   Ollama NVIDIA GPU:
-#     docker compose --profile nvidia up -d
-#
-#   Ollama AMD ROCm:
-#     docker compose --profile amd up -d
-#
-#   Ollama Intel GPU:
-#     docker compose --profile intel up -d
-#
-#   Ollama Vulkan:
-#     docker compose --profile vulkan up -d
-#
-# Dashboard:       http://localhost:8099
-# Control Plane:   http://localhost:8085
-# Registry:        http://localhost:8086/nodes
-# Node 1:          http://localhost:8081
-# Memory Exporter: http://localhost:8090/status
-# Obsidian GUI:    http://localhost:8091   <- Obsidian nel browser (KasmVNC)
-#                  vault su Mac: ./data/obsidian-vault
-# Ollama Titler:   interno Docker (porta 11435 su Mac per debug)
-# SearXNG:         http://localhost:8092  (web search engine self-hosted)
-#
-# TTS/STT: configurare dal pannello Admin -> Settings -> Audio
-#   TTS consigliato: Web API (voce sistema macOS, italiano nativo)
-#   STT consigliato: Web API (dettatura browser, italiano nativo)
+# Dashboard (Infra UI): http://localhost:8099
+# Control Plane:        http://localhost:8085
+# Registry:             http://localhost:8086
+# Open WebUI:           http://localhost:3000
+# Obsidian:             http://localhost:8091
 # ============================================================
 
 services:
@@ -62,9 +41,6 @@ services:
       start_period: 20s
 
   # -- SearXNG (web search self-hosted) -------------------------------------------------
-  # Accessibile dal browser: http://localhost:8092
-  # Usato internamente da control-plane per il tool web_search
-  # Nessuna API key richiesta, nessun rate-limit esterno.
   searxng:
     image: searxng/searxng:latest
     container_name: hyperspace_searxng
@@ -282,9 +258,6 @@ services:
       - hyperspace
 
   # -- Open WebUI -----------------------------------------------------------------------
-  # TTS/STT: NON configurare via env — usare Admin Panel -> Settings -> Audio
-  # Opzione consigliata su macOS: Web API (usa voci sistema, italiano disponibile)
-  # Opzione alternativa: piper-tts container esterno (vedi docker-compose aggiuntivo)
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: hyperspace_open_webui
@@ -324,7 +297,7 @@ services:
       REGISTRY_PUBLIC_URL: "${REGISTRY_PUBLIC_URL:-https://sanctuary-mower-plated.ngrok-free.dev}"
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:1234}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3}
-      INFERENCE_BACKEND: ${INFERENCE_BACKEND:-lmstudio}
+      INFERENCE_BACKEND: ${INFERENCE_BACKEND:-ollama}
       MEMORY_TTL_DAYS: "${MEMORY_TTL_DAYS:-7}"
       MEMORY_MAX_ENTRIES: "${MEMORY_MAX_ENTRIES:-200}"
       SEARXNG_URL: "http://searxng:8080"
@@ -362,7 +335,7 @@ services:
       NODE_TTL: "${NODE_TTL:-300}"
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:1234}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-phi3}
-      INFERENCE_BACKEND: ${INFERENCE_BACKEND:-lmstudio}
+      INFERENCE_BACKEND: ${INFERENCE_BACKEND:-ollama}
       VRAM_GB: ${VRAM_GB:-0.0}
       SIGN_REQUESTS: ${SIGN_REQUESTS:-true}
       PYTHONUNBUFFERED: "1"
@@ -371,9 +344,6 @@ services:
     networks:
       - hyperspace
     restart: unless-stopped
-
-#  node-2:
-#    ...
 
 networks:
   hyperspace:
