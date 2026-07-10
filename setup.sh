@@ -1,7 +1,6 @@
 #!/bin/bash
 # =============================================================
-# HyperSpace AGI v1.02 — Setup iniziale
-# Copia il modello qwen2 da Ollama nativo nel container titler
+# HyperSpace AGI v1.03 — Setup iniziale
 # =============================================================
 set -e
 
@@ -10,7 +9,7 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-echo -e "${GREEN}[HyperSpace] Setup avviato...${NC}"
+echo -e "${GREEN}[HyperSpace] Setup avviato (v1.03)...${NC}"
 
 # 1. Verifica Ollama nativo
 if ! command -v ollama &>/dev/null; then
@@ -18,34 +17,34 @@ if ! command -v ollama &>/dev/null; then
   exit 1
 fi
 
-# 2. Verifica modello qwen2 sull'host
+# 2. Verifica modello qwen2 sull'host (opzionale)
 if ! ollama list 2>/dev/null | grep -q "qwen2"; then
-  echo -e "${YELLOW}[HyperSpace] qwen2 non trovato. Download in corso (~350MB)...${NC}"
-  ollama pull qwen2:0.5b
+  echo -e "${YELLOW}[HyperSpace] qwen2 non trovato. Download in corso...${NC}"
+  ollama pull qwen2:0.5b || true
 fi
 
-# 3. Avvia i container (crea i volumi)
-echo -e "${GREEN}[HyperSpace] Avvio container...${NC}"
-docker compose up -d --build
+# 3. Avvia tutti i container
+echo -e "${GREEN}[HyperSpace] Avvio stack completo...${NC}"
+docker compose up -d --build --remove-orphans
 
-# 4. Attendi che il volume ollama_titler_data esista
-echo -e "${YELLOW}[HyperSpace] Attendo avvio ollama-titler...${NC}"
-sleep 5
+# 4. Attendi che i servizi critici siano up
+echo -e "${YELLOW}[HyperSpace] Attendo avvio servizi...${NC}"
+sleep 8
 
-# 5. Copia modelli dal Mac nel container titler
-echo -e "${GREEN}[HyperSpace] Copio modello qwen2 nel titler Docker...${NC}"
-docker run --rm \
-  -v "$HOME/.ollama":/host_ollama:ro \
-  -v hyperspace-agi-102_ollama_titler_data:/root/.ollama \
-  alpine sh -c "cp -r /host_ollama/models /root/.ollama/"
-
-# 6. Restart memory-graph per sicurezza
-docker compose restart memory-graph
+# 5. (Opzionale) Copia modelli da Ollama host nel titler
+# Se non ti serve più questa funzionalità, puoi rimuovere questa sezione
+if docker volume ls | grep -q "opodark-hyperspace-agi-103_ollama_titler_data"; then
+  echo -e "${GREEN}[HyperSpace] Copio eventuale modello nel titler...${NC}"
+  docker run --rm \
+    -v "$HOME/.ollama":/host_ollama:ro \
+    -v opodark-hyperspace-agi-103_ollama_titler_data:/root/.ollama \
+    alpine sh -c "cp -r /host_ollama/models /root/.ollama/ 2>/dev/null || true"
+fi
 
 echo -e "${GREEN}"
-echo "  ✓ HyperSpace AGI pronto!"
-echo "  Dashboard:    http://localhost:8099"
+echo "  ✓ HyperSpace AGI 1.03 pronto!"
 echo "  Control Plane: http://localhost:8085"
-echo "  Obsidian:      http://localhost:8091  (password: abc)"
-echo "  Memory API:    http://localhost:8090/status"
+echo "  Dashboard (Infra UI): http://localhost:8099"
+echo "  Open WebUI:   http://localhost:3000"
+echo "  Obsidian:      http://localhost:8091"
 echo -e "${NC}"
