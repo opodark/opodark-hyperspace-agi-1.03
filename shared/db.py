@@ -1,7 +1,8 @@
 # shared/db.py
-# HyperSpace AGI v1.02 — SQLite persistence layer
-# Tabelle: logs, nodes, tasks
-# Usato dal control-plane per sostituire i log in-memory.
+# HyperSpace AGI v1.03 — SQLite persistence layer
+# Tabelle: logs, nodes, tasks, federated_peers
+# Usato dal control-plane per sostituire i log in-memory e per
+# gestire l'allowlist dei control-plane federati.
 
 import json
 import os
@@ -73,6 +74,17 @@ def init_db():
                 status       TEXT DEFAULT 'created',
                 result       TEXT DEFAULT '',
                 error        TEXT DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS federated_peers (
+                peer_id     TEXT PRIMARY KEY,
+                label       TEXT DEFAULT '',
+                pubkey      TEXT NOT NULL,
+                endpoint    TEXT NOT NULL,
+                enabled     INTEGER DEFAULT 1,
+                added_at    TEXT DEFAULT (datetime('now')),
+                last_seen   TEXT,
+                last_status TEXT DEFAULT 'unknown'
             );
         """)
     print(f"[DB] Initialized at {DB_PATH}")
@@ -206,3 +218,59 @@ def get_all_tasks() -> list:
     with _conn() as con:
         rows = con.execute("SELECT * FROM tasks ORDER BY id DESC").fetchall()
     return [dict(r) for r in rows]
+
+
+# ── FEDERATED PEERS ────────────────────────────────────────────────────────────
+# Allowlist dei control-plane federati fidati. Un peer entra qui SOLO tramite
+# pairing manuale (dashboard / API), mai per auto-discovery — a differenza
+# dei nodi, che possono autoannunciarsi liberamente.
+
+def upsert_federated_peer(peer: dict):
+    with _conn() as con:
+        con.execute("""
+            INSERT INTO federated_peers (peer_id, label, pubkey, endpoint, enabled, last_seen, last_status)
+            VALUES (:peer_id, :label, :pubkey, :endpoint, :enabled, :last_seen, :last_status)
+            ON CONFLICT(peer_id) DO UPDATE SET
+                label       = excluded.label,
+                pubkey      = excluded.pubkey,
+                endpoint    = excluded.endpoint,
+                enabled     = excluded.enabled
+        """, {
+            "peer_id":     peer.get("peer_id", ""),
+            "label":       peer.get("label", ""),
+            "pubkey":      peer.get("pubkey", ""),
+            "endpoint":    peer.get("endpoint", ""),
+            "enabled":     int(peer.get("enabled", 1)),
+            "last_seen":   peer.get("last_seen"),
+            "last_status": peer.get("last_status", "unknown"),
+        })
+
+
+def get_all_federated_peers() -> list:
+    with _conn() as con:
+        rows = con.execute("SELECT * FROM federated_peers ORDER BY added_at DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_federated_peer(peer_id: str):
+    with _conn() as con:
+        row = con.execute("SELECT * FROM federated_peers WHERE peer_id = ?", (peer_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def set_federated_peer_enabled(peer_id: str, enabled: bool):
+    with _conn() as con:
+        con.execute("UPDATE federated_peers SET enabled = ? WHERE peer_id = ?", (int(enabled), peer_id))
+
+
+def delete_federated_peer(peer_id: str):
+    with _conn() as con:
+        con.execute("DELETE FROM federated_peers WHERE peer_id = ?", (peer_id,))
+
+
+def touch_federated_peer(peer_id: str, status: str):
+    with _conn() as con:
+        con.execute(
+            "UPDATE federated_peers SET last_seen = datetime('now'), last_status = ? WHERE peer_id = ?",
+            (status, peer_id),
+        )

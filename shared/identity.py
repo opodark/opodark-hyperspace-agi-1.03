@@ -1,8 +1,19 @@
 # shared/identity.py
-# HyperSpace AGI v1.02 — Node Identity + Request Signing
-# Genera e persiste keypair ECDSA secp256k1 per ogni nodo.
+# HyperSpace AGI v1.03 — Node Identity + Request Signing
+# Genera e persiste keypair ECDSA secp256k1 per ogni nodo (e per il
+# control-plane stesso, che riusa questo stesso modulo per la federazione).
 # node_id = sha256(pubkey_bytes).hexdigest()[:40]
 # v1.02: aggiunge make_request_headers / verify_request_headers per firma HTTP inter-nodo
+# fix v1.03: verify_request_headers ora normalizza i nomi degli header a
+#            minuscolo prima di leggerli. La spec ASGI (FastAPI/Starlette/
+#            Uvicorn) impone che dict(request.headers) restituisca sempre
+#            chiavi minuscole, indipendentemente da come il chiamante le ha
+#            inviate (make_request_headers produce "X-Node-Id" ecc., con la
+#            maiuscola, per leggibilità) — senza questa normalizzazione la
+#            verifica falliva SEMPRE con 401 "invalid or missing node
+#            signature" per qualunque richiesta passata attraverso un
+#            middleware ASGI, inclusi /announce, /execute, /peer/add,
+#            /verify tra nodi e ora anche le chiamate del control-plane.
 
 import base64
 import hashlib
@@ -124,15 +135,24 @@ def verify_request_headers(headers: dict, body: bytes = b"", max_age_s: int = 30
     """Verifica gli header di firma di una richiesta inter-nodo in ingresso.
 
     Controlla:
-    - presenza di tutti gli header richiesti
+    - presenza di tutti gli header richiesti (case-insensitive: vedi nota
+      in testa al modulo sul motivo per cui è indispensabile)
     - timestamp non troppo vecchio (replay protection, default 30s)
     - firma ECDSA valida su sha256(timestamp + body)
     """
     try:
-        node_id   = headers.get("X-Node-Id", "")
-        pubkey_hex = headers.get("X-Node-Pubkey", "")
-        ts_str    = headers.get("X-Node-Timestamp", "")
-        sig_b64   = headers.get("X-Node-Signature", "")
+        # dict(request.headers) di un'app ASGI (FastAPI/Starlette/Uvicorn)
+        # restituisce SEMPRE chiavi minuscole per spec, indipendentemente
+        # da come il client li ha inviati (make_request_headers usa
+        # "X-Node-Id" ecc. per leggibilità). Normalizziamo qui invece di
+        # assumere una capitalizzazione specifica lato chiamante — senza
+        # questo passaggio la verifica fallisce sempre.
+        h = {str(k).lower(): v for k, v in headers.items()}
+
+        node_id    = h.get("x-node-id", "")
+        pubkey_hex = h.get("x-node-pubkey", "")
+        ts_str     = h.get("x-node-timestamp", "")
+        sig_b64    = h.get("x-node-signature", "")
 
         if not all([node_id, pubkey_hex, ts_str, sig_b64]):
             return False

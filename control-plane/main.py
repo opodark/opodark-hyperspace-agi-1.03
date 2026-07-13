@@ -1,5 +1,5 @@
 # control-plane/main.py
-# HyperSpace AGI v1.02 — Control Plane
+# HyperSpace AGI v1.03 — Control Plane
 # feat: /v1/chat/completions OpenAI-compatible endpoint
 # feat: tool calling loop — web_search, omega_query, omega_store, get_mesh_status
 # feat: memory sync inter-nodo nell'heartbeat + smart task routing (tier/vram/load)
@@ -7,6 +7,11 @@
 # feat: OMEGA Obsidian bridge — /health + /mcp JSON-RPC 2.0
 # feat: CORS middleware for Open WebUI compatibility
 # feat: nodo root/hub locale (Mac) registrato al boot, promosso se mesh vuota
+# feat: FEDERAZIONE CP-to-CP — identità ECDSA propria, allowlist peer,
+#       /federate/execute in entrata, fallback in uscita quando non ci sono
+#       nodi locali attivi. Il CP non deve mai essere esposto pubblicamente
+#       da solo: davanti va il federation-gateway, che inoltra SOLO
+#       /federate/execute e /federation/identity (vedi federation-gateway/).
 # fix: tool loop robusto — fallback no-tools se modello non supporta function calling
 # fix: health check JSON-aware — nodi zombie ngrok marcati unreachable
 # fix: _TOOL_HANDLERS definito dopo le funzioni omega (NameError fix)
@@ -14,6 +19,8 @@
 # fix: SSE stream headers
 # fix: web_search — SearXNG self-hosted (http://searxng:8080) invece di DuckDuckGo Instant API
 # fix: best selection sceglie il nodo con score più alto senza escludere quelli con endpoint vuoto
+# fix: ora il CP firma le richieste inoltrate al nodo 
+
 from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
 from flask_cors import CORS
 import os, threading, time, requests, json, uuid, gzip, hashlib, socket
@@ -24,6 +31,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(BASE_DIR, ".."))
 
 import shared.db as db
+from shared.identity import (
+    generate_or_load_identity,
+    make_request_headers,
+    verify_request_headers,
+)
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
@@ -45,6 +57,14 @@ MEMORY_MAX_ENTRIES = int(os.getenv("MEMORY_MAX_ENTRIES", "200"))
 # SearXNG — motore di ricerca self-hosted (container searxng nella stessa rete Docker)
 # Override via env: SEARXNG_URL=http://searxng:8080
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://searxng:8080").rstrip("/")
+
+# ── FEDERAZIONE CP-to-CP ───────────────────────────────────────────────────────
+# FEDERATION_ENABLED    : true (default) — disabilita per isolare completamente il CP
+# FEDERATION_PUBLIC_URL : l'URL pubblico del TUO federation-gateway (non del CP!),
+#                         quello che condividi con l'admin di un altro sito per il
+#                         pairing. Vuoto finché non hai un gateway pubblico attivo.
+FEDERATION_ENABLED    = os.getenv("FEDERATION_ENABLED", "true").lower() == "true"
+FEDERATION_PUBLIC_URL = os.getenv("FEDERATION_PUBLIC_URL", "").rstrip("/")
 
 # ── NODO ROOT/HUB LOCALE ─────────────────────────────────────────────────────
 # LOCAL_NODE_ID       : ID stabile (default: deriva da hostname)
@@ -96,7 +116,7 @@ def _register_local_node():
         "endpoint":     ep,
         "tier":         tier,
         "status":       "active",
-        "version":      "1.02.0",
+        "version":      "1.03.0",
         "vram_gb":      vram_gb,
         "peers_active": len(active_others),
         "uptime_s":     0,
@@ -141,6 +161,7 @@ tasks: dict = {}
 _nodes_by_id: dict  = {}
 _known_endpoints: set = set()
 _synced_memory_keys: set = set()
+_last_discarded_warn_ids: set = set()  # throttling per il log "nodo senza endpoint"
 
 hb_state = {
     "cycle": 0, "last_tick": None, "last_conn": None,
@@ -156,6 +177,16 @@ advanced_config = {
 }
 
 db.init_db()
+
+# Identità ECDSA del control-plane stesso, riusando lo stesso meccanismo già
+# usato dai nodi (shared/identity.py). Persistita sotto DATA_DIR (default
+# ./data, montato come volume — vedi docker-compose.yml) così il peer_id non
+# cambia ad ogni riavvio, altrimenti l'allowlist degli altri CP si romperebbe.
+_cp_identity    = generate_or_load_identity()
+CP_ID           = _cp_identity["node_id"]
+CP_PUBKEY       = _cp_identity["public_key"]
+_cp_private_key = _cp_identity["_private_key"]
+print(f"[CP] Federation identity: {CP_ID[:20]}... (federation={'ON' if FEDERATION_ENABLED else 'OFF'})")
 
 # ── HELPERS ───────────────────────────────────────────────────────────────────
 def _normalize_endpoint(ep: str) -> str:
@@ -327,6 +358,21 @@ def _select_best_node(active_nodes: list) -> dict:
         if local:
             return local
     executable = [n for n in active_nodes if _best_endpoint(n)]
+    discarded  = [n for n in active_nodes if not _best_endpoint(n)]
+    if discarded:
+        discarded_ids = {n.get("node_id", "?") for n in discarded}
+        # Logga solo quando cambia l'insieme dei nodi scartati, non ad ogni
+        # singola chiamata (rischierebbe di intasare i log: questa funzione
+        # viene chiamata ad ogni task/chat completion).
+        global _last_discarded_warn_ids
+        if discarded_ids != _last_discarded_warn_ids:
+            push_log(
+                'mesh_event',
+                f'{len(discarded)} nodo/i esclusi dallo scoring: endpoint mancante',
+                detail=', '.join(nid[:16] for nid in discarded_ids),
+                status='warn',
+            )
+            _last_discarded_warn_ids = discarded_ids
     if not executable:
         return None
     return max(executable, key=_node_score)
@@ -485,7 +531,7 @@ def _omega_stats(args: dict) -> str:
         f"ttl_days: {MEMORY_TTL_DAYS}\n"
         f"file_size_kb: {round(size_bytes / 1024, 2)}\n"
         f"mesh_nodes_active: {nodes_active}\n"
-        f"engine: hyperspace-agi v1.02"
+        f"engine: hyperspace-agi v1.03"
     )
 
 # ── WEB SEARCH ────────────────────────────────────────────────────────────────
@@ -501,7 +547,7 @@ def _tool_web_search(args: dict) -> str:
     # ── 1. SearXNG JSON API ───────────────────────────────────────────────────
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; HyperSpaceAGI/1.02)",
+            "User-Agent": "Mozilla/5.0 (compatible; HyperSpaceAGI/1.03)",
             "Accept":     "application/json",
         }
         params = {
@@ -536,7 +582,7 @@ def _tool_web_search(args: dict) -> str:
     # ── 2. Fallback: DuckDuckGo lite (scraping HTML) ─────────────────────────
     try:
         import re
-        headers2  = {"User-Agent": "Mozilla/5.0 (compatible; HyperSpaceAGI/1.02)"}
+        headers2  = {"User-Agent": "Mozilla/5.0 (compatible; HyperSpaceAGI/1.03)"}
         r2        = requests.get("https://lite.duckduckgo.com/lite/",
                                  params={"q": query}, headers=headers2, timeout=8)
         snippets  = re.findall(r'class="result-snippet"[^>]*>([^<]+)<', r2.text)
@@ -713,6 +759,60 @@ def _run_tool_loop(data: dict, ollama_base: str, max_iterations: int = 5) -> dic
 
     return last_resp
 
+# ── ESECUZIONE FIRMATA SUL NODO ────────────────────────────────────────────────
+def _call_node_execute(endpoint: str, payload: dict, timeout: int = 120):
+    """POST /execute su un nodo, firmato con l'identita' ECDSA del CP.
+    node/main.py protegge /execute (tra gli altri path) con verifica firma
+    quando SIGN_REQUESTS=true (default): senza questi header il nodo
+    risponde 401 'invalid or missing node signature'. Riusiamo la stessa
+    identita' generata per la federazione — verify_request_headers lato
+    nodo non richiede un'identita' "autorizzata" specifica, solo una firma
+    valida e recente (anti-replay 30s)."""
+    body = json.dumps(payload, sort_keys=True).encode()
+    headers = make_request_headers(CP_ID, CP_PUBKEY, _cp_private_key, body)
+    headers["Content-Type"] = "application/json"
+    return requests.post(f"{endpoint.rstrip('/')}/execute", data=body, headers=headers, timeout=timeout)
+
+# ── FEDERAZIONE CP-to-CP ───────────────────────────────────────────────────────
+def _federate_to_peer(peer: dict, prompt: str, model: str, timeout: int = 120):
+    """Inoltra un task a un CP federato tramite il SUO federation-gateway
+    pubblico. Firma la richiesta con l'identità ECDSA di questo CP, cosi'
+    l'altro CP puo' verificarla contro la propria allowlist (verifica che
+    avviene SEMPRE lato ricevente, mai qui)."""
+    task_id = f"fed-{uuid.uuid4().hex[:10]}"
+    body    = json.dumps({"task_id": task_id, "prompt": prompt, "model": model}, sort_keys=True).encode()
+    headers = make_request_headers(CP_ID, CP_PUBKEY, _cp_private_key, body)
+    headers["Content-Type"] = "application/json"
+    endpoint = peer.get("endpoint", "").rstrip("/")
+    if not endpoint:
+        return None
+    try:
+        r = requests.post(f"{endpoint}/federate/execute", data=body, headers=headers, timeout=timeout)
+        r.raise_for_status()
+        db.touch_federated_peer(peer["peer_id"], "ok")
+        return r.json()
+    except Exception as e:
+        db.touch_federated_peer(peer["peer_id"], "unreachable")
+        push_log('mesh_event',
+                 f'Federazione verso {peer.get("label") or peer["peer_id"][:12]} fallita',
+                 str(e), status='warn')
+        return None
+
+def _try_federated_execution(prompt: str, model: str):
+    """Prova i peer federati abilitati, in ordine, finche' uno risponde.
+    Chiamata SOLO quando non ci sono nodi locali attivi disponibili —
+    oggi e' un fallback semplice, non ancora integrato nello scoring
+    pesato di _node_score (possibile evoluzione futura)."""
+    if not FEDERATION_ENABLED:
+        return None, None
+    for peer in db.get_all_federated_peers():
+        if not peer.get("enabled"):
+            continue
+        result = _federate_to_peer(peer, prompt, model)
+        if result:
+            return result, peer
+    return None, None
+
 # ── /v1/models ────────────────────────────────────────────────────────────────
 @app.route('/v1/models')
 def v1_models():
@@ -760,6 +860,9 @@ def v1_chat_completions():
     ollama_base = advanced_config["ollama"]["url"].rstrip("/")
 
     # ── STREAM ────────────────────────────────────────────────────────────────
+    # NOTA: lo streaming oggi resta locale (nodo o ollama-direct). La
+    # federazione verso un altro CP entra in gioco solo nel percorso
+    # non-stream — proxare uno stream SSE cross-CP e' un passo successivo.
     if stream:
         if selected and _best_endpoint(selected):
             node_id    = selected.get("node_id", "cp")
@@ -812,6 +915,18 @@ def v1_chat_completions():
         except Exception as e:
             push_log('inter_node_message', f'task {task_id} fallback ollama', str(e), status='warn')
 
+    # Nessun nodo locale disponibile: prova la federazione prima di ricadere
+    # su Ollama diretto. Un CP federato viene trattato come un "super-nodo":
+    # non sappiamo (né ci interessa) quale nodo useranno per eseguirlo.
+    fed_result, fed_peer = _try_federated_execution(prompt, model)
+    if fed_result:
+        node_label = f"federated:{fed_peer['peer_id'][:12]}"
+        inner_result = fed_result.get("result", fed_result)
+        _finalize_task(task, task_id, node_label, model, prompt, inner_result)
+        push_log('inter_node_message', f'task {task_id} federato -> {fed_peer.get("label") or node_label}',
+                 status='success')
+        return jsonify(inner_result)
+
     task["node"] = "ollama-direct"
     db.update_task(task_id, "assigned", node_id="ollama-direct", endpoint=ollama_base)
     try:
@@ -852,7 +967,7 @@ def omega_health():
     entries      = _load_memory()
     nodes_active = len([n for n in _node_list() if n.get("status") == "active"])
     return jsonify({
-        "status": "ok", "engine": "hyperspace-agi", "version": "1.02",
+        "status": "ok", "engine": "hyperspace-agi", "version": "1.03",
         "memories": len(entries), "nodes_active": nodes_active,
         "ttl_days": MEMORY_TTL_DAYS,
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -938,17 +1053,24 @@ def mesh_announce():
     data = request.get_json(force=True, silent=True) or {}
     ep   = _normalize_endpoint(data.get("endpoint", ""))
     nid  = data.get("node_id", "")
-    if not ep or not nid:
-        return jsonify({"ok": False, "error": "missing endpoint or node_id"}), 400
+
+    if not nid:
+        return jsonify({"ok": False, "error": "missing node_id"}), 400
+
+    # Accetta endpoint browser:// per web-nodes (synthetic)
+    if not ep:
+        ep = f"browser://{nid}"
+
     existing      = _nodes_by_id.get(nid)
     should_update = True
     if existing:
         existing_ep = _normalize_endpoint(existing.get("endpoint", ""))
-        if existing_ep.startswith("https://") and not ep.startswith("https://"):
+        if existing_ep.startswith("https://") and not ep.startswith("https://") and not ep.startswith("browser://"):
             should_update = False
     if should_update:
         info = {**data, "endpoint": ep, "status": "active",
-                "last_seen": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+                "last_seen": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "is_web_node": ep.startswith("browser://")}
         _nodes_by_id[nid] = info
         _known_endpoints.add(ep)
         db.upsert_node(info)
@@ -1117,6 +1239,12 @@ def assign_task():
     if not active:
         return jsonify({"error": "No active nodes"}), 503
     selected = _select_best_node(active)
+    if not selected:
+        # Nessun nodo attivo ha un endpoint eseguibile (es. solo il nodo
+        # locale di bookkeeping, senza LOCAL_NODE_ENDPOINT configurato).
+        push_log('inter_node_message', f'Task {task_id} fallito: nessun nodo eseguibile',
+                 status='failed')
+        return jsonify({"error": "No executable nodes (solo bookkeeping locale?)"}), 503
     endpoint = _best_endpoint(selected)
     node_id  = selected["node_id"]
     score    = round(_node_score(selected), 3)
@@ -1128,7 +1256,13 @@ def assign_task():
              target=node_id[:12], status='pending', trace_id=tid)
     _notify_bridge("task", {"from": "cp", "to": node_id[:12], "type": "task", "label": f'Task {task_id}'})
     try:
-        r = requests.post(f"{endpoint}/execute", json=task, timeout=120)
+        exec_payload = {
+            "task_id": task_id,
+            "prompt":  task.get("payload", {}).get("prompt", ""),
+            "model":   task.get("payload", {}).get("model", ""),
+        }
+        r = _call_node_execute(endpoint, exec_payload, timeout=120)
+        r.raise_for_status()
         task.update({"result": r.json(), "status": "done",
                      "completed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
         db.update_task(task_id, "done", result=json.dumps(task["result"]))
@@ -1176,6 +1310,118 @@ def memory_stats():
         "file_size_kb": round(size_bytes/1024, 2),
         "file": MEMORY_FILE_GZ,
     })
+
+# ── FEDERAZIONE — IDENTITÀ E ALLOWLIST ─────────────────────────────────────────
+# Queste rotte, tranne /federation/identity e /federate/execute, NON devono
+# mai essere raggiungibili pubblicamente: sono pensate per essere chiamate
+# solo dalla dashboard sulla rete privata. Il federation-gateway davanti al
+# CP le esclude esplicitamente dal proprio whitelist di path inoltrati.
+
+@app.route('/federation/identity')
+def federation_identity():
+    """La TUA identità da condividere (fuori banda) con l'admin di un altro
+    sito per il pairing. Nessuna auth qui: è pubblica per design, come una
+    chiave pubblica SSH — non concede alcun accesso da sola."""
+    return jsonify({
+        "peer_id":  CP_ID,
+        "pubkey":   CP_PUBKEY,
+        "endpoint": FEDERATION_PUBLIC_URL,
+    })
+
+@app.route('/federation/peers', methods=['GET'])
+def list_federated_peers():
+    return jsonify(db.get_all_federated_peers())
+
+@app.route('/federation/peers', methods=['POST'])
+def add_federated_peer():
+    data     = request.get_json(force=True, silent=True) or {}
+    pubkey   = data.get("pubkey", "").strip()
+    endpoint = data.get("endpoint", "").strip().rstrip("/")
+    label    = data.get("label", "").strip()
+    if not pubkey or not endpoint:
+        return jsonify({"error": "pubkey e endpoint sono obbligatori"}), 400
+    try:
+        peer_id = hashlib.sha256(bytes.fromhex(pubkey)).hexdigest()[:40]
+    except ValueError:
+        return jsonify({"error": "pubkey non valida (attesa hex, come da /federation/identity)"}), 400
+    db.upsert_federated_peer({
+        "peer_id": peer_id, "label": label, "pubkey": pubkey,
+        "endpoint": endpoint, "enabled": 1, "last_status": "unknown",
+    })
+    push_log('system', f'Federated peer aggiunto: {label or peer_id[:12]}',
+             detail=f'endpoint={endpoint}', status='success')
+    return jsonify({"ok": True, "peer_id": peer_id}), 201
+
+@app.route('/federation/peers/<peer_id>/toggle', methods=['POST'])
+def toggle_federated_peer(peer_id):
+    peer = db.get_federated_peer(peer_id)
+    if not peer:
+        return jsonify({"error": "peer non trovato"}), 404
+    new_state = not bool(peer.get("enabled"))
+    db.set_federated_peer_enabled(peer_id, new_state)
+    push_log('system', f'Federated peer {"abilitato" if new_state else "disabilitato"}: {peer_id[:12]}', status='info')
+    return jsonify({"ok": True, "enabled": new_state})
+
+@app.route('/federation/peers/<peer_id>', methods=['DELETE'])
+def remove_federated_peer(peer_id):
+    db.delete_federated_peer(peer_id)
+    push_log('system', f'Federated peer rimosso: {peer_id[:12]}', status='info')
+    return jsonify({"ok": True})
+
+@app.route('/federate/execute', methods=['POST'])
+def federate_execute():
+    """Punto di ingresso per un task inoltrato da un ALTRO control-plane
+    federato. Raggiungibile pubblicamente SOLO tramite federation-gateway.
+    Esegue sui nodi LOCALI di questo CP — non ri-federa a sua volta, per
+    evitare loop tra CP federati tra loro."""
+    if not FEDERATION_ENABLED:
+        return jsonify({"error": "federazione disabilitata su questo CP"}), 403
+
+    raw_body  = request.get_data()
+    headers   = dict(request.headers)
+    sender_id = headers.get("X-Node-Id", "")
+
+    peer = db.get_federated_peer(sender_id)
+    if not peer or not peer.get("enabled"):
+        push_log('mesh_event', f'Federazione rifiutata: peer sconosciuto {sender_id[:16] or "?"}', status='failed')
+        return jsonify({"error": "peer non autorizzato"}), 403
+
+    # La pubkey nell'header deve coincidere ESATTAMENTE con quella salvata
+    # in allowlist per questo peer_id, altrimenti chiunque potrebbe generare
+    # un keypair nuovo e reclamare un peer_id gia' fidato con una chiave sua.
+    if headers.get("X-Node-Pubkey", "") != peer.get("pubkey", ""):
+        push_log('mesh_event', f'Federazione rifiutata: pubkey non corrisponde {sender_id[:16]}', status='failed')
+        return jsonify({"error": "pubkey non corrisponde all'allowlist"}), 403
+
+    if not verify_request_headers(headers, raw_body):
+        push_log('mesh_event', f'Federazione rifiutata: firma non valida o scaduta {sender_id[:16]}', status='failed')
+        return jsonify({"error": "firma non valida o scaduta"}), 401
+
+    data    = json.loads(raw_body or b"{}")
+    prompt  = data.get("prompt", "")
+    model   = data.get("model", advanced_config['ollama']['defaultModel'])
+    task_id = data.get("task_id") or f"fed-{uuid.uuid4().hex[:10]}"
+
+    active   = [n for n in _node_list() if n.get("status") == "active"]
+    selected = _select_best_node(active)
+    if not selected:
+        db.touch_federated_peer(sender_id, "no_capacity")
+        return jsonify({"error": "nessun nodo locale disponibile"}), 503
+
+    endpoint = _best_endpoint(selected)
+    try:
+        r = _call_node_execute(endpoint, {"task_id": task_id, "prompt": prompt, "model": model}, timeout=120)
+        r.raise_for_status()
+        result = r.json()
+    except Exception as e:
+        db.touch_federated_peer(sender_id, "error")
+        return jsonify({"error": str(e)}), 502
+
+    db.touch_federated_peer(sender_id, "ok")
+    push_log('inter_node_message',
+             f'Task federato {task_id} da {peer.get("label") or sender_id[:12]} -> {selected.get("node_id","?")[:12]}',
+             status='success')
+    return jsonify({"task_id": task_id, "status": "done", "result": result})
 
 # ── MEMORY SYNC ───────────────────────────────────────────────────────────────
 def _sync_memory_across_nodes():
@@ -1307,8 +1553,9 @@ def _poll_mesh_nodes():
 
 def heartbeat_loop():
     time.sleep(3)
-    push_log('system', 'Control-plane v1.02 started',
-             detail=f'nodes={len(_nodes_by_id)} endpoints={list(_known_endpoints)}', status='info')
+    push_log('system', 'Control-plane v1.03 started',
+             detail=f'nodes={len(_nodes_by_id)} endpoints={list(_known_endpoints)} federation_id={CP_ID[:16]}',
+             status='info')
     hb_state["running"] = True
     while True:
         cycle = hb_state["cycle"] + 1
