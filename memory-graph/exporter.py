@@ -230,7 +230,7 @@ def _write_index(entries: list, vault: str):
         "| ts | type | node | title |",
         "|---|---|---|---|",
     ]
-    for e in sorted(entries, key=lambda x: x.get("ts") or x.get("timestamp") or "", reverse=True)[:200]:
+    for e in sorted(entries, key=lambda x: _ts_to_iso(x.get("ts") or x.get("timestamp")) or "" , reverse=True)[:200]:
         ts    = _ts_to_iso(e.get("ts") or e.get("timestamp"))
         etype = e.get("type") or e.get("event_type") or "memory"
         node  = (e.get("node_id") or e.get("source") or "")[:16]
