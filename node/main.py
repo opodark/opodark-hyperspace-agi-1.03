@@ -1,6 +1,11 @@
 # node/main.py
-# HyperSpace AGI v1.02 — Unified Node
+# HyperSpace AGI v1.03 — Unified Node
 # v1.02: middleware firma inter-nodo, /ollama/pull SSE, ollama-proxy, /memory
+# v1.03: aggiunto /v1/chat/completions — il control-plane instrada qui i
+#        chat completions quando sceglie questo nodo (invece di ollama-direct
+#        o di /execute). Prima mancava del tutto: la richiesta cadeva sempre
+#        su un 404, mascherato finché il nodo veniva scartato dallo scoring
+#        del CP (bug già corretto lato control-plane).
 # fix: heartbeat try/except+retry, endpoint normalizzato, peer TTL configurabile
 # fix: /execute accetta campo 'task', salva in memory.jsonl, propaga al CP
 
@@ -8,6 +13,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
 import asyncio
 import httpx
+import json
 import os
 import sys
 import threading
@@ -34,6 +40,13 @@ _private_key = _identity["_private_key"]
 NODE_HOSTNAME        = os.getenv("NODE_HOSTNAME", "localhost")
 NODE_PORT            = int(os.getenv("NODE_PORT", 8084))
 OLLAMA_URL           = os.getenv("OLLAMA_URL", "http://ollama:11434")
+# ollama-proxy gira nello stesso container (vedi node/Dockerfile, entrambi
+# avviati dallo stesso CMD) sulla porta 11435. /v1/chat/completions instrada
+# qui, non direttamente a OLLAMA_URL, cosi' ogni conversazione passa dalla
+# strumentazione di ollama-proxy (log su control-plane, memoria condivisa,
+# propagazione ai peer) — la stessa che oggi copre gia' /api/generate e
+# /api/chat quando qualcuno chiama ollama-proxy direttamente.
+OLLAMA_PROXY_URL     = os.getenv("OLLAMA_PROXY_URL", "http://localhost:11435")
 DEFAULT_MODEL        = os.getenv("OLLAMA_MODEL", "phi3")
 HEARTBEAT_EVERY      = int(os.getenv("HEARTBEAT_EVERY", 15))
 PUBLIC_ENDPOINT      = os.getenv("PUBLIC_ENDPOINT", "").strip().rstrip("/")
@@ -79,6 +92,7 @@ NODE_CAPABILITIES = ["execute"]
 if VRAM_GB > 0 or os.getenv("OLLAMA_URL"):
     NODE_CAPABILITIES.append("ollama")
 NODE_CAPABILITIES.append("ollama-proxy")
+NODE_CAPABILITIES.append("v1-chat-completions")
 
 def _normalize_endpoint(ep: str) -> str:
     ep = ep.strip().rstrip("/")
@@ -101,7 +115,7 @@ NODE_PROFILE = {
     "endpoint":     NODE_ADVERTISED_ENDPOINT,
     "capabilities": NODE_CAPABILITIES,
     "vram_gb":      VRAM_GB,
-    "version":      "1.02.0",
+    "version":      "1.03.0",
 }
 
 # ── PEER REGISTRY ─────────────────────────────────────────
@@ -365,7 +379,7 @@ def heartbeat_loop():
 async def startup_event():
     t = threading.Thread(target=heartbeat_loop, daemon=True)
     t.start()
-    print(f"[NODE:{NODE_ID[:10]}] started v1.02.0")
+    print(f"[NODE:{NODE_ID[:10]}] started v1.03.0")
     print(f"[NODE:{NODE_ID[:10]}] tier={NODE_PROFILE['tier']} (forced={_FORCED_TIER or 'no'})")
     print(f"[NODE:{NODE_ID[:10]}] advertised={NODE_ADVERTISED_ENDPOINT}")
     print(f"[NODE:{NODE_ID[:10]}] vram_gb={VRAM_GB} (env={_vram_env} detected={_vram_detected})")
@@ -376,7 +390,11 @@ async def startup_event():
     print(f"[NODE:{NODE_ID[:10]}] ollama -> {OLLAMA_URL}")
 
 # ── MIDDLEWARE firma ───────────────────────────────────────
-SIGNED_PATHS = {"/announce", "/execute", "/peer/add", "/verify"}
+# /v1/chat/completions e' ora firmata: la chiama SOLO il control-plane
+# (mai Open WebUI direttamente), che la instrada qui in base allo scoring
+# dei nodi. Prima non lo era: chiunque raggiungesse il nodo poteva farlo
+# generare a piacimento, bypassando interamente il control-plane.
+SIGNED_PATHS = {"/announce", "/execute", "/peer/add", "/verify", "/v1/chat/completions"}
 
 @app.middleware("http")
 async def inter_node_auth(request: Request, call_next):
@@ -502,7 +520,10 @@ async def execute_task(task: dict):
     model = task.get("model") or task.get("payload", {}).get("model") or DEFAULT_MODEL
     response_text = await ollama_generate(prompt, model)
 
-    # Salva in memoria locale e propaga al CP, solo se non sono dei task per i titoli, altrimenti si genera loop infinito
+    # Salva in memoria locale e propaga al CP, solo se non sono dei task per i
+    # titoli (task_id con prefisso "title-"), altrimenti si genera un loop
+    # infinito: la generazione del titolo per una entry finirebbe a sua
+    # volta in memoria come nuova entry da titolare.
     is_title_task = task_id.startswith("title-")
     if not is_title_task:
         entry = {
@@ -517,6 +538,56 @@ async def execute_task(task: dict):
         await _push_memory_to_cp(entry)
 
     return {"node_id": NODE_ID, "task_id": task_id, "status": "done", "model": model, "response": response_text}
+
+# ── /v1/chat/completions ────────────────────────────────────
+# Proxy trasparente verso il backend Ollama/LM Studio LOCALE di questo nodo.
+# Il control-plane instrada qui i chat completions (streaming e non) quando
+# sceglie questo nodo come target. Autenticata dal middleware inter_node_auth
+# (vedi SIGNED_PATHS sopra): solo il control-plane puo' invocarla, mai Open
+# WebUI direttamente. Dopo l'autenticazione, il nodo NON parla piu' con
+# Ollama direttamente: rigira a ollama-proxy (stesso container, porta
+# 11435), che si occupa di log/memoria condivisa e poi tocca Ollama per
+# ultimo. Catena completa: CP (firma) -> nodo (autentica) -> ollama-proxy
+# (strumenta) -> Ollama.
+@app.post("/v1/chat/completions")
+async def v1_chat_completions_proxy(request: Request):
+    body = await request.body()
+    try:
+        payload = json.loads(body or b"{}")
+    except Exception:
+        payload = {}
+    stream = bool(payload.get("stream", False))
+
+    if stream:
+        async def _stream_gen():
+            try:
+                async with httpx.AsyncClient(timeout=180.0) as client:
+                    async with client.stream(
+                        "POST", f"{OLLAMA_PROXY_URL}/v1/chat/completions",
+                        content=body, headers={"Content-Type": "application/json"},
+                    ) as resp:
+                        async for chunk in resp.aiter_bytes():
+                            if chunk:
+                                yield chunk
+            except Exception as e:
+                yield f'data: {{"error": "{e}"}}\n\n'.encode()
+        return StreamingResponse(_stream_gen(), media_type="text/event-stream")
+
+    try:
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            r = await client.post(
+                f"{OLLAMA_PROXY_URL}/v1/chat/completions",
+                content=body, headers={"Content-Type": "application/json"},
+            )
+            return Response(
+                content=r.content, status_code=r.status_code,
+                media_type=r.headers.get("content-type", "application/json"),
+            )
+    except Exception as e:
+        return Response(
+            content=json.dumps({"error": {"message": str(e), "type": "server_error"}}),
+            status_code=503, media_type="application/json",
+        )
 
 @app.get("/ollama/health")
 async def check_ollama():

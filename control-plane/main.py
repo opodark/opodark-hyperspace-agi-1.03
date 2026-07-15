@@ -693,8 +693,19 @@ def _execute_tool_call(tool_name: str, tool_args) -> str:
         return f"Errore esecuzione tool '{tool_name}': {e}"
 
 # ── TOOL CALLING LOOP ─────────────────────────────────────────────────────────
-def _call_ollama(ollama_base: str, payload: dict) -> dict:
-    r   = requests.post(f"{ollama_base}/v1/chat/completions", json=payload, timeout=180)
+def _call_ollama(ollama_base: str, payload: dict, sign: bool = False) -> dict:
+    """Chiama /v1/chat/completions. Se sign=True (target = un nodo della
+    mesh), firma la richiesta con l'identita' ECDSA del CP — il nodo ora
+    richiede questa firma su questo path (vedi node/main.py SIGNED_PATHS).
+    Se sign=False (target = Ollama diretto, fallback), nessuna firma:
+    Ollama non la capirebbe comunque."""
+    if sign:
+        body = json.dumps(payload, sort_keys=True).encode()
+        headers = make_request_headers(CP_ID, CP_PUBKEY, _cp_private_key, body)
+        headers["Content-Type"] = "application/json"
+        r = requests.post(f"{ollama_base}/v1/chat/completions", data=body, headers=headers, timeout=180)
+    else:
+        r = requests.post(f"{ollama_base}/v1/chat/completions", json=payload, timeout=180)
     raw = r.text.strip()
     if not raw:
         raise ValueError(f"Ollama body vuoto (HTTP {r.status_code})")
@@ -703,17 +714,17 @@ def _call_ollama(ollama_base: str, payload: dict) -> dict:
     except Exception:
         raise ValueError(f"Risposta non-JSON da Ollama (HTTP {r.status_code}): {raw[:200]}")
 
-def _run_tool_loop(data: dict, ollama_base: str, max_iterations: int = 5) -> dict:
+def _run_tool_loop(data: dict, ollama_base: str, max_iterations: int = 5, sign: bool = False) -> dict:
     messages       = list(data.get("messages", []))
     model          = data.get("model", DEFAULT_MODEL)
     supports_tools = _model_supports_tools(model)
-    push_log('system', f'tool_loop: model={model} tools={supports_tools}', status='info')
+    push_log('system', f'tool_loop: model={model} tools={supports_tools} signed={sign}', status='info')
 
     if not supports_tools:
         payload = {**data, "messages": messages, "stream": False}
         payload.pop("tools", None)
         try:
-            return _call_ollama(ollama_base, payload)
+            return _call_ollama(ollama_base, payload, sign=sign)
         except Exception as e:
             return {"error": {"message": str(e), "type": "server_error"}}
 
@@ -725,14 +736,14 @@ def _run_tool_loop(data: dict, ollama_base: str, max_iterations: int = 5) -> dic
     for iteration in range(max_iterations):
         payload = {**data, "messages": messages, "tools": all_tools, "stream": False}
         try:
-            resp = _call_ollama(ollama_base, payload)
+            resp = _call_ollama(ollama_base, payload, sign=sign)
         except ValueError as e:
             push_log('system', f'tool_loop fallback no-tools: {str(e)[:120]}', status='warn')
             if iteration == 0:
                 plain = {**data, "messages": messages, "stream": False}
                 plain.pop("tools", None)
                 try:
-                    return _call_ollama(ollama_base, plain)
+                    return _call_ollama(ollama_base, plain, sign=sign)
                 except Exception as e2:
                     return {"error": {"message": str(e2), "type": "server_error"}}
             return last_resp or {"error": {"message": str(e), "type": "server_error"}}
@@ -865,13 +876,15 @@ def v1_chat_completions():
     # non-stream — proxare uno stream SSE cross-CP e' un passo successivo.
     if stream:
         if selected and _best_endpoint(selected):
-            node_id    = selected.get("node_id", "cp")
-            endpoint   = _best_endpoint(selected)
-            target_url = f"{endpoint}/v1/chat/completions"
+            node_id      = selected.get("node_id", "cp")
+            endpoint     = _best_endpoint(selected)
+            target_url   = f"{endpoint}/v1/chat/completions"
+            target_is_node = True
         else:
-            node_id    = "ollama-direct"
-            endpoint   = ollama_base
-            target_url = f"{ollama_base}/v1/chat/completions"
+            node_id      = "ollama-direct"
+            endpoint     = ollama_base
+            target_url   = f"{ollama_base}/v1/chat/completions"
+            target_is_node = False
         task["node"] = node_id
         db.update_task(task_id, "assigned", node_id=node_id, endpoint=endpoint)
 
@@ -885,7 +898,16 @@ def v1_chat_completions():
 
         def _stream_gen():
             try:
-                with requests.post(target_url, json=stream_data, stream=True, timeout=180) as resp:
+                if target_is_node:
+                    # Firmato: solo il CP puo' invocare /v1/chat/completions
+                    # di un nodo (vedi node/main.py SIGNED_PATHS).
+                    body = json.dumps(stream_data, sort_keys=True).encode()
+                    headers = make_request_headers(CP_ID, CP_PUBKEY, _cp_private_key, body)
+                    headers["Content-Type"] = "application/json"
+                    req = requests.post(target_url, data=body, headers=headers, stream=True, timeout=180)
+                else:
+                    req = requests.post(target_url, json=stream_data, stream=True, timeout=180)
+                with req as resp:
                     for chunk in resp.iter_content(chunk_size=None):
                         if chunk:
                             yield chunk
@@ -909,7 +931,7 @@ def v1_chat_completions():
         push_log('inter_node_message', f'task {task_id} -> {node_id[:12]}',
                  f'model={model}', source='webui', target=node_id[:12], status='pending')
         try:
-            result_json = _run_tool_loop(data, endpoint)
+            result_json = _run_tool_loop(data, endpoint, sign=True)
             _finalize_task(task, task_id, node_id, model, prompt, result_json)
             return jsonify(result_json)
         except Exception as e:
@@ -930,7 +952,7 @@ def v1_chat_completions():
     task["node"] = "ollama-direct"
     db.update_task(task_id, "assigned", node_id="ollama-direct", endpoint=ollama_base)
     try:
-        result_json = _run_tool_loop(data, ollama_base)
+        result_json = _run_tool_loop(data, ollama_base, sign=False)
         _finalize_task(task, task_id, "ollama-direct", model, prompt, result_json)
         return jsonify(result_json)
     except Exception as e:

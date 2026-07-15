@@ -1,7 +1,15 @@
 # node/ollama_proxy.py
-# HyperSpace AGI v1.02 — Ollama Proxy
+# HyperSpace AGI v1.03 — Ollama Proxy
 #
-# Emula l'API Ollama su porta 11435.
+# Emula l'API Ollama (e ora anche l'API OpenAI-compatibile) su porta 11435.
+# Non e' piu' pensato per essere chiamato direttamente da Open WebUI: il
+# punto di ingresso e' node/main.py:/v1/chat/completions (autenticato,
+# raggiungibile solo dal control-plane), che rigira qui internamente
+# (localhost, stesso container). Questo file resta comunque raggiungibile
+# sulla rete Docker per compatibilita' con le sue rotte Ollama-native
+# preesistenti (/api/generate, /api/chat, ecc.), ma il percorso "ufficiale"
+# per le chat della mesh e' /v1/chat/completions.
+#
 # Ogni richiesta viene:
 #   1. Inoltrata al vero Ollama (OLLAMA_URL)
 #   2. Loggata nel control-plane come "webui_interaction"
@@ -11,6 +19,7 @@
 import asyncio
 import json
 import os
+import sys
 import time
 import uuid
 from datetime import datetime, timezone
@@ -22,7 +31,6 @@ from fastapi.responses import StreamingResponse
 
 OLLAMA_URL        = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434").rstrip("/")
 CONTROL_PLANE_URL = os.getenv("CONTROL_PLANE_URL", "").rstrip("/")
-NODE_ID           = os.getenv("NODE_ID", "unknown")
 NODE_TIER         = os.getenv("NODE_TIER", "leaf")
 PUBLIC_ENDPOINT   = os.getenv("PUBLIC_ENDPOINT", "").rstrip("/")
 PROXY_PORT        = int(os.getenv("PROXY_PORT", 11435))
@@ -31,7 +39,19 @@ DATA_DIR   = Path(os.getenv("DATA_DIR", "/app/data"))
 MEMORY_FILE = DATA_DIR / "memory.jsonl"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="HyperSpace Ollama Proxy", version="1.02.0")
+# NODE_ID condiviso con node/main.py: entrambi i processi girano nello
+# stesso container con lo stesso DATA_DIR, quindi generate_or_load_identity()
+# qui non genera un nuovo keypair — carica quello gia' creato da main.py.
+# Prima ollama-proxy usava un NODE_ID separato (env var mai valorizzata),
+# risultando sempre "unknown" nei log e nelle entry di memoria.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+try:
+    from shared.identity import generate_or_load_identity
+    NODE_ID = generate_or_load_identity()["node_id"]
+except Exception:
+    NODE_ID = os.getenv("NODE_ID", "unknown")
+
+app = FastAPI(title="HyperSpace Ollama Proxy", version="1.03.0")
 
 # ── MEMORIA COLLETTIVA ────────────────────────────────────
 def save_memory(entry: dict):
@@ -103,7 +123,7 @@ async def _record_interaction(
         return_exceptions=True,
     )
 
-# ── PROXY ROUTES ──────────────────────────────────────────
+# ── PROXY ROUTES — Ollama-native ─────────────────────────────
 
 @app.get("/api/tags")
 async def proxy_tags():
@@ -136,10 +156,7 @@ async def proxy_generate(request: Request):
     t0 = time.time()
 
     if stream:
-        response_chunks = []
-
         async def stream_and_log():
-            nonlocal response_chunks
             full_response = ""
             try:
                 async with httpx.AsyncClient(timeout=300.0) as client:
@@ -232,6 +249,71 @@ async def proxy_chat(request: Request):
                 return Response(content=r.content, media_type="application/json")
         except Exception as e:
             return Response(content=json.dumps({"error": str(e)}),
+                            status_code=503, media_type="application/json")
+
+# ── PROXY ROUTE — OpenAI-compatibile ─────────────────────────
+# Punto di ingresso "ufficiale" per le chat instradate dalla mesh: chiamato
+# da node/main.py:/v1/chat/completions dopo che questo ha autenticato la
+# richiesta del control-plane. Ultimo hop prima di Ollama vero.
+@app.post("/v1/chat/completions")
+async def proxy_openai_chat(request: Request):
+    body = await request.json()
+    model    = body.get("model", "")
+    messages = body.get("messages", [])
+    prompt_summary = " | ".join(
+        f"{m.get('role','?')}: {str(m.get('content',''))[:120]}"
+        for m in messages[-3:]
+    )
+    stream = body.get("stream", False)
+    t0 = time.time()
+
+    if stream:
+        async def stream_and_log():
+            full_response = ""
+            try:
+                async with httpx.AsyncClient(timeout=300.0) as client:
+                    async with client.stream(
+                        "POST", f"{OLLAMA_URL}/v1/chat/completions", json=body
+                    ) as resp:
+                        async for raw_chunk in resp.aiter_bytes():
+                            if not raw_chunk:
+                                continue
+                            # Passthrough byte-per-byte: non tocchiamo mai il
+                            # framing SSE (righe vuote comprese) inoltrato al
+                            # client, per non romperlo.
+                            yield raw_chunk
+                            # Parsing "best effort" SOLO per il logging: non
+                            # deve mai poter interrompere lo streaming.
+                            try:
+                                for line in raw_chunk.decode("utf-8", errors="ignore").splitlines():
+                                    if line.startswith("data: ") and "[DONE]" not in line:
+                                        chunk = json.loads(line[len("data: "):])
+                                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                                        full_response += delta.get("content", "")
+                            except Exception:
+                                pass
+            except Exception as e:
+                yield f'data: {{"error": "{e}"}}\n\n'.encode()
+            finally:
+                dur = int((time.time() - t0) * 1000)
+                await _record_interaction(prompt_summary, full_response, model, duration_ms=dur)
+
+        return StreamingResponse(stream_and_log(), media_type="text/event-stream")
+    else:
+        try:
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                r = await client.post(f"{OLLAMA_URL}/v1/chat/completions", json=body)
+                dur = int((time.time() - t0) * 1000)
+                try:
+                    data    = r.json()
+                    content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                except Exception:
+                    content = ""
+                await _record_interaction(prompt_summary, content, model, duration_ms=dur)
+                return Response(content=r.content, status_code=r.status_code,
+                                media_type=r.headers.get("content-type", "application/json"))
+        except Exception as e:
+            return Response(content=json.dumps({"error": {"message": str(e), "type": "server_error"}}),
                             status_code=503, media_type="application/json")
 
 # Tutti gli altri endpoint Ollama: pass-through generico
