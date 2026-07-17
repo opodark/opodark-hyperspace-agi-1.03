@@ -12,6 +12,7 @@
 #       nodi locali attivi. Il CP non deve mai essere esposto pubblicamente
 #       da solo: davanti va il federation-gateway, che inoltra SOLO
 #       /federate/execute e /federation/identity (vedi federation-gateway/).
+# feat: aggregazione modelli, pinning esplicito del nodo anche con alias
 # fix: tool loop robusto — fallback no-tools se modello non supporta function calling
 # fix: health check JSON-aware — nodi zombie ngrok marcati unreachable
 # fix: _TOOL_HANDLERS definito dopo le funzioni omega (NameError fix)
@@ -20,6 +21,27 @@
 # fix: web_search — SearXNG self-hosted (http://searxng:8080) invece di DuckDuckGo Instant API
 # fix: best selection sceglie il nodo con score più alto senza escludere quelli con endpoint vuoto
 # fix: ora il CP firma le richieste inoltrate al nodo 
+
+# control-plane/main.py
+# HyperSpace AGI v1.03 — Control Plane
+# feat: /v1/chat/completions OpenAI-compatible endpoint
+# feat: tool calling loop — web_search, omega_query, omega_store, get_mesh_status
+# feat: memory sync inter-nodo nell'heartbeat + smart task routing (tier/vram/load)
+# feat: memory compression — gzip + TTL/max-entries pruning
+# feat: OMEGA Obsidian bridge — /health + /mcp JSON-RPC 2.0
+# feat: CORS middleware for Open WebUI compatibility
+# feat: nodo root/hub locale (Mac) registrato al boot, promosso se mesh vuota
+# feat: FEDERAZIONE CP-to-CP — identità ECDSA propria, allowlist peer,
+#       /federate/execute in entrata, fallback in uscita quando non ci sono
+#       nodi locali attivi. Il CP non deve mai essere esposto pubblicamente
+#       da solo: davanti va il federation-gateway, che inoltra SOLO
+#       /federate/execute e /federation/identity (vedi federation-gateway/).
+# fix: tool loop robusto — fallback no-tools se modello non supporta function calling
+# fix: health check JSON-aware — nodi zombie ngrok marcati unreachable
+# fix: _TOOL_HANDLERS definito dopo le funzioni omega (NameError fix)
+# fix: DB reload al boot, status recovery, endpoint dedup
+# fix: SSE stream headers
+# fix: web_search — SearXNG self-hosted (http://searxng:8080) invece di DuckDuckGo Instant API
 
 from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
 from flask_cors import CORS
@@ -339,24 +361,33 @@ def _node_score(node: dict) -> float:
     uptime_s = min(int(node.get("uptime_s", 0)), 604800) / 604800.0
     return tier_s * 0.40 + vram_s * 0.30 + peers_s * 0.20 + uptime_s * 0.10
 
-def _select_best_node(active_nodes: list) -> dict:
-    """Seleziona il nodo migliore. Preferisce sempre il nodo locale se attivo
-    E ha un endpoint eseguibile. Esclude SEMPRE i nodi senza endpoint (es. il
-    nodo locale pseudo-registrato per bookkeeping/tier quando
-    LOCAL_NODE_ENDPOINT non e' configurato): non hanno un /execute reale da
-    chiamare, e in passato potevano comunque "vincere" lo scoring grazie al
-    tier root/hub e alla VRAM host rilevata via sysctl, causando richieste
-    verso un endpoint vuoto."""
+def _select_best_node(active_nodes: list, model: str = None, pinned_node: str = None) -> dict:
+    """Seleziona il nodo migliore.
+
+    model        : se specificato, restringe ai soli nodi che risultano
+                   avere quel modello (in base all'ultima rilevazione via
+                   /ollama/models, aggiornata ad ogni ciclo di heartbeat).
+                   Se nessun nodo CONOSCIUTO ce l'ha, ritorna None — il
+                   chiamante deve restituire un errore esplicito, mai
+                   tentare comunque l'esecuzione su un nodo che non ce
+                   l'ha. Se invece non abbiamo ANCORA informazioni sui
+                   modelli di nessun nodo (es. subito dopo un riavvio del
+                   CP, prima del primo poll), il filtro viene saltato
+                   invece di bloccare tutto per mancanza di dati freschi.
+    pinned_node  : prefisso di node_id per selezionare esplicitamente un
+                   nodo (scelta manuale dell'utente, es. da un model id
+                   tipo "phi3::a1b2c3d4e5f6"). Se il nodo non e' tra quelli
+                   attivi/eseguibili, o non ha il modello richiesto,
+                   ritorna None: nessun fallback silenzioso, la scelta
+                   esplicita dell'utente merita un errore esplicito.
+
+    Esclude SEMPRE i nodi senza endpoint eseguibile (es. il nodo locale
+    pseudo-registrato per bookkeeping/tier quando LOCAL_NODE_ENDPOINT non
+    e' configurato): non hanno un /execute reale da chiamare.
+    """
     if not active_nodes:
         return None
-    if _LOCAL_NODE_ENABLED and _LOCAL_NODE_ENDPOINT:
-        local = next(
-            (n for n in active_nodes
-             if n.get("node_id") == _LOCAL_NODE_ID and n.get("status") == "active"),
-            None
-        )
-        if local:
-            return local
+
     executable = [n for n in active_nodes if _best_endpoint(n)]
     discarded  = [n for n in active_nodes if not _best_endpoint(n)]
     if discarded:
@@ -373,11 +404,105 @@ def _select_best_node(active_nodes: list) -> dict:
                 status='warn',
             )
             _last_discarded_warn_ids = discarded_ids
+
+    if model:
+        known = [n for n in executable if n.get("models") is not None]
+        if known:
+            executable = [n for n in known if model in n.get("models", [])]
+        # else: nessun nodo ha ancora info sui modelli -> non filtriamo,
+        # meglio instradare con lo scoring normale che rifiutare tutto.
+        if not executable:
+            return None
+
+    if pinned_node:
+        pinned_lower = pinned_node.lower()
+        def _matches_pin(n):
+            if n.get("node_id", "").startswith(pinned_node):
+                return True
+            alias_slug = _slugify_alias(n.get("alias", "")) if n.get("alias") else ""
+            return bool(alias_slug) and alias_slug == pinned_lower
+        return next((n for n in executable if _matches_pin(n)), None)
+
+    if _LOCAL_NODE_ENABLED and _LOCAL_NODE_ENDPOINT:
+        local = next(
+            (n for n in executable if n.get("node_id") == _LOCAL_NODE_ID),
+            None
+        )
+        if local:
+            return local
+
     if not executable:
         return None
     return max(executable, key=_node_score)
 
 # ── MODELLI ───────────────────────────────────────────────────────────────────
+_MODEL_NODE_SEP = "::"
+
+def _parse_model_pin(model: str):
+    """'phi3::a1b2c3d4e5f6' -> ('phi3', 'a1b2c3d4e5f6'); 'phi3' -> ('phi3', None).
+    Il separatore '::' (doppio) non collide con i tag Ollama (che usano ':'
+    singolo, es. 'phi3:latest')."""
+    if model and _MODEL_NODE_SEP in model:
+        real_model, node_prefix = model.rsplit(_MODEL_NODE_SEP, 1)
+        return real_model, node_prefix
+    return model, None
+
+def _slugify_alias(alias: str) -> str:
+    """'Il Mac di sopra' -> 'il-mac-di-sopra'. Usato per costruire un pin
+    leggibile in /v1/models e per confrontare gli alias in modo tollerante
+    a maiuscole/spazi extra."""
+    import re
+    s = (alias or "").strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    return s[:40]
+
+def _fetch_node_models(node: dict) -> list:
+    """Interroga /ollama/models di un singolo nodo. Ritorna [] se
+    irraggiungibile o in errore (mai None qui: None significa
+    esplicitamente "non ancora interrogato", gestito solo in
+    _poll_mesh_nodes per preservare l'ultimo valore noto)."""
+    ep = _best_endpoint(node)
+    if not ep:
+        return []
+    try:
+        r = requests.get(f"{ep}/ollama/models", timeout=4)
+        if r.status_code == 200:
+            data = r.json()
+            return data.get("models", []) if isinstance(data, dict) else []
+    except Exception:
+        pass
+    return []
+
+def _fetch_mesh_models() -> dict:
+    """Aggrega i modelli disponibili su tutta la mesh: backend locale del
+    CP (ollama-direct) + ogni nodo attivo con info sui modelli gia' note
+    (aggiornate ad ogni heartbeat, non interrogate qui in tempo reale per
+    non rallentare le richieste che la chiamano).
+    Ritorna {model_name: [{"origin": "local"}, {"origin": "node", "node_id": "...",
+             "node_id_full": "...", "alias": "..."|None, "label": "..."}, ...]}
+    "label" e' cio' che finisce nel pin di /v1/models: l'alias slugificato
+    se presente, altrimenti il node_id troncato.
+    """
+    mesh: dict = {}
+    local = _fetch_models()
+    for m in local.get("models", []):
+        mesh.setdefault(m, []).append({"origin": "local"})
+    for node in _node_list():
+        if node.get("status") != "active":
+            continue
+        alias = node.get("alias") or ""
+        label = _slugify_alias(alias) if alias else node.get("node_id", "")[:12]
+        for m in (node.get("models") or []):
+            mesh.setdefault(m, []).append({
+                "origin":       "node",
+                "node_id":      node.get("node_id", "")[:12],
+                "node_id_full": node.get("node_id", ""),
+                "alias":        alias or None,
+                "label":        label,
+            })
+    return mesh
+
+
 def _fetch_models():
     url = advanced_config["ollama"]["url"].rstrip("/")
     errors = []
@@ -827,13 +952,24 @@ def _try_federated_execution(prompt: str, model: str):
 # ── /v1/models ────────────────────────────────────────────────────────────────
 @app.route('/v1/models')
 def v1_models():
-    result     = _fetch_models()
+    mesh = _fetch_mesh_models()
+    ids = set()
+    for name, origins in mesh.items():
+        ids.add(name)  # entry generica: routing automatico sulla mesh
+        for o in origins:
+            if o["origin"] == "node":
+                # entry pinnata: selezione esplicita di un nodo specifico
+                # dal dropdown di Open WebUI. Usa l'alias se presente
+                # (es. "phi3::il-mac-di-sopra"), altrimenti il node_id
+                # troncato (es. "phi3::a1b2c3d4e5f6") — entrambi si
+                # risolvono correttamente in _select_best_node.
+                ids.add(f"{name}{_MODEL_NODE_SEP}{o['label']}")
+    if not ids:
+        ids = {DEFAULT_MODEL}
     models_out = [
         {"id": m, "object": "model", "created": 0, "owned_by": "hyperspace-agi"}
-        for m in result.get("models", [DEFAULT_MODEL])
+        for m in sorted(ids)
     ]
-    if not models_out:
-        models_out = [{"id": DEFAULT_MODEL, "object": "model", "created": 0, "owned_by": "hyperspace-agi"}]
     return jsonify({"object": "list", "data": models_out})
 
 # ── /v1/chat/completions ──────────────────────────────────────────────────────
@@ -842,11 +978,14 @@ def v1_chat_completions():
     if request.method == 'OPTIONS':
         return '', 204
 
-    data     = request.get_json(force=True, silent=True) or {}
-    messages = data.get("messages", [])
-    model    = data.get("model", advanced_config["ollama"]["defaultModel"])
-    stream   = data.get("stream", False)
-    task_id  = str(uuid.uuid4())[:8]
+    data          = request.get_json(force=True, silent=True) or {}
+    messages      = data.get("messages", [])
+    model_raw     = data.get("model", advanced_config["ollama"]["defaultModel"])
+    model, pinned_node = _parse_model_pin(model_raw)
+    data          = dict(data)
+    data["model"] = model  # Ollama non deve mai vedere il suffisso "::nodo"
+    stream        = data.get("stream", False)
+    task_id       = str(uuid.uuid4())[:8]
 
     prompt = ""
     for m in reversed(messages):
@@ -864,11 +1003,23 @@ def v1_chat_completions():
     }
     tasks[task_id] = task
     db.insert_task(task)
-    push_log('system', f'WebUI task: {task_id}', detail=f'model={model} stream={stream} prompt={prompt[:80]}')
+    push_log('system', f'WebUI task: {task_id}',
+             detail=f'model={model} pinned_node={pinned_node or "-"} stream={stream} prompt={prompt[:80]}')
 
     active      = [n for n in _node_list() if n.get("status") == "active"]
-    selected    = _select_best_node(active)
+    selected    = _select_best_node(active, model=model, pinned_node=pinned_node)
     ollama_base = advanced_config["ollama"]["url"].rstrip("/")
+
+    if pinned_node and not selected:
+        # Nodo scelto esplicitamente dall'utente ma non attivo o senza il
+        # modello richiesto: errore diretto, MAI un fallback silenzioso —
+        # la scelta esplicita dell'utente merita un errore esplicito.
+        err_msg = f"Nodo '{pinned_node}' non attivo o senza il modello '{model}'"
+        task["status"] = "failed"
+        task["error"]  = err_msg
+        db.update_task(task_id, "failed", error=err_msg)
+        push_log('inter_node_message', f'task {task_id} pin fallito', err_msg, status='failed')
+        return jsonify({"error": {"message": err_msg, "type": "invalid_request_error"}}), 404
 
     # ── STREAM ────────────────────────────────────────────────────────────────
     # NOTA: lo streaming oggi resta locale (nodo o ollama-direct). La
@@ -1093,6 +1244,12 @@ def mesh_announce():
         info = {**data, "endpoint": ep, "status": "active",
                 "last_seen": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "is_web_node": ep.startswith("browser://")}
+        # Il nodo non sa nulla di alias/modelli (sono concetti solo lato
+        # CP, alias impostato da dashboard, modelli rilevati via heartbeat):
+        # senza questo, un semplice re-announce li azzererebbe.
+        if existing:
+            info["alias"]  = existing.get("alias", "")
+            info["models"] = existing.get("models")
         _nodes_by_id[nid] = info
         _known_endpoints.add(ep)
         db.upsert_node(info)
@@ -1103,6 +1260,34 @@ def mesh_announce():
 @app.route('/mesh/nodes')
 def get_mesh_nodes():
     return jsonify(_node_list())
+
+@app.route('/mesh/node/<node_id>/alias', methods=['POST'])
+def set_node_alias(node_id):
+    """Imposta/rimuove l'alias di un nodo (stringa vuota = rimuovi).
+    Usato dalla dashboard per rendere i nodi riconoscibili a colpo
+    d'occhio, e propagato automaticamente al pin dei modelli in
+    /v1/models (es. "phi3::il-mac-di-sopra" invece di "phi3::a1b2c3d4e5f6")."""
+    if node_id not in _nodes_by_id:
+        return jsonify({"error": "nodo non trovato"}), 404
+    data  = request.get_json(force=True, silent=True) or {}
+    alias = str(data.get("alias", "")).strip()[:60]
+
+    if alias:
+        slug = _slugify_alias(alias)
+        if not slug:
+            return jsonify({"error": "alias non valido dopo la normalizzazione"}), 400
+        collision = next(
+            (nid for nid, n in _nodes_by_id.items()
+             if nid != node_id and n.get("alias") and _slugify_alias(n["alias"]) == slug),
+            None
+        )
+        if collision:
+            return jsonify({"error": f"alias gia' in uso dal nodo {collision[:12]}"}), 409
+
+    _nodes_by_id[node_id]["alias"] = alias
+    db.set_node_alias(node_id, alias)
+    push_log('system', f'Alias nodo aggiornato: {node_id[:12]} -> "{alias or "(rimosso)"}"', status='info')
+    return jsonify({"ok": True, "node_id": node_id, "alias": alias})
 
 @app.route('/nodes/active')
 def get_nodes_active():
@@ -1229,6 +1414,14 @@ def rotate_secret():
 def list_models():
     return jsonify(_fetch_models())
 
+@app.route('/models/mesh')
+def list_mesh_models():
+    """Modelli aggregati su tutta la mesh (locale + ogni nodo attivo),
+    con origine — usato dalla dashboard per mostrare quale modello vive
+    dove. /v1/models (sotto) resta la versione OpenAI-compatibile per
+    Open WebUI."""
+    return jsonify(_fetch_mesh_models())
+
 @app.route('/ollama/status')
 def ollama_status():
     result = _fetch_models()
@@ -1260,13 +1453,14 @@ def assign_task():
     active = [n for n in _node_list() if n.get("status") == "active"]
     if not active:
         return jsonify({"error": "No active nodes"}), 503
-    selected = _select_best_node(active)
+    task_model = tasks[task_id].get("payload", {}).get("model") or None
+    selected = _select_best_node(active, model=task_model)
     if not selected:
-        # Nessun nodo attivo ha un endpoint eseguibile (es. solo il nodo
-        # locale di bookkeeping, senza LOCAL_NODE_ENDPOINT configurato).
-        push_log('inter_node_message', f'Task {task_id} fallito: nessun nodo eseguibile',
-                 status='failed')
-        return jsonify({"error": "No executable nodes (solo bookkeeping locale?)"}), 503
+        # Nessun nodo attivo ha un endpoint eseguibile, oppure nessuno tra
+        # quelli conosciuti ha il modello richiesto.
+        reason = f"nessun nodo ha il modello '{task_model}'" if task_model else "nessun nodo eseguibile (solo bookkeeping locale?)"
+        push_log('inter_node_message', f'Task {task_id} fallito: {reason}', status='failed')
+        return jsonify({"error": reason}), 503
     endpoint = _best_endpoint(selected)
     node_id  = selected["node_id"]
     score    = round(_node_score(selected), 3)
@@ -1530,6 +1724,21 @@ def _poll_mesh_nodes():
                     if not existing or \
                        not _normalize_endpoint(existing.get("endpoint","")).startswith("https://") or \
                        ep.startswith("https://"):
+                        # Preserva l'ultimo elenco modelli noto se questo
+                        # specifico fetch fallisce (blip transitorio),
+                        # invece di azzerarlo e far sembrare il nodo senza
+                        # modelli disponibili.
+                        prev_models = existing.get("models") if existing else None
+                        info["alias"] = existing.get("alias", "") if existing else ""
+                        try:
+                            models_resp = requests.get(f"{ep}/ollama/models", timeout=4)
+                            if models_resp.status_code == 200:
+                                md = models_resp.json()
+                                info["models"] = md.get("models", []) if isinstance(md, dict) else []
+                            else:
+                                info["models"] = prev_models
+                        except Exception:
+                            info["models"] = prev_models
                         _nodes_by_id[nid] = info
                         db.upsert_node(info)
                 try:

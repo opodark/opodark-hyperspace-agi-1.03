@@ -59,6 +59,7 @@ def init_db():
                 vram_gb    REAL DEFAULT 0.0,
                 peers_active INTEGER DEFAULT 0,
                 status     TEXT DEFAULT 'active',
+                alias      TEXT DEFAULT '',
                 last_seen  TEXT DEFAULT (datetime('now'))
             );
 
@@ -87,6 +88,13 @@ def init_db():
                 last_status TEXT DEFAULT 'unknown'
             );
         """)
+        # Migrazione per DB creati prima dell'introduzione della colonna
+        # alias: CREATE TABLE IF NOT EXISTS non aggiunge colonne a una
+        # tabella gia' esistente, serve ALTER TABLE esplicito.
+        try:
+            con.execute("ALTER TABLE nodes ADD COLUMN alias TEXT DEFAULT ''")
+        except Exception:
+            pass  # colonna gia' presente
     print(f"[DB] Initialized at {DB_PATH}")
 
 
@@ -179,6 +187,22 @@ def get_all_nodes() -> list:
     with _conn() as con:
         rows = con.execute("SELECT * FROM nodes ORDER BY last_seen DESC").fetchall()
     return [dict(r) for r in rows]
+
+
+def set_node_alias(node_id: str, alias: str):
+    """Separata da upsert_node di proposito: upsert_node viene chiamata ad
+    ogni ciclo di heartbeat con i dati che il nodo riporta di se' stesso
+    (che non includono l'alias, e' un concetto solo lato CP) — se l'alias
+    fosse nella stessa query rischierebbe di essere azzerato ad ogni
+    refresh periodico."""
+    with _conn() as con:
+        con.execute("UPDATE nodes SET alias = ? WHERE node_id = ?", (alias, node_id))
+
+
+def get_node_alias(node_id: str) -> str:
+    with _conn() as con:
+        row = con.execute("SELECT alias FROM nodes WHERE node_id = ?", (node_id,)).fetchone()
+    return row["alias"] if row and row["alias"] else ""
 
 
 # ── TASKS ─────────────────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>HyperSpace AGI v1.02</title>
+<title>HyperSpace AGI v1.03</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.29.2/cytoscape.min.js"></script>
 <style>
@@ -75,6 +75,9 @@ main{padding:18px 20px;display:grid}
 .node-status-dot.unreachable{background:var(--error)}
 .node-status-dot.unknown{background:var(--text-faint)}
 .node-id{font-family:var(--font-mono);font-size:.72rem;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.node-alias{cursor:pointer;font-size:.72rem;color:var(--text);padding:1px 6px;border-radius:4px;transition:background var(--tr);flex:0 0 auto;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.node-alias:hover{background:var(--surface3)}
+.node-alias-empty{color:var(--text-faint);font-style:italic}
 .tier-badge{display:inline-flex;padding:2px 8px;border-radius:99px;font-size:.6rem;font-weight:700;text-transform:uppercase;flex-shrink:0}
 .tier-root{background:rgba(240,98,146,.15);color:var(--root)}
 .tier-hub{background:rgba(77,208,225,.12);color:var(--hub)}
@@ -474,6 +477,37 @@ function scoreBadge(score){
 }
 
 // Nodes
+function escAttr(s) {
+  // Come escH, ma sicuro anche dentro attributi onclick con apici singoli.
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/'/g, '&#39;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+async function renameNode(nodeId, currentAlias) {
+  var alias = prompt('Alias per il nodo ' + nodeId.slice(0, 16) + '...\n(lascia vuoto per rimuoverlo)', currentAlias || '');
+  if (alias === null) return; // annullato
+
+  try {
+    var r = await fetch('/mesh/node/' + encodeURIComponent(nodeId) + '/alias', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ alias: alias.trim() })
+    });
+    var d = await r.json();
+    if (!r.ok) {
+      alert('Errore: ' + (d.error || 'sconosciuto'));
+      return;
+    }
+    refreshNodes(); // ricarica la lista con l'alias aggiornato
+  } catch (e) {
+    alert('Errore di rete: ' + e.message);
+  }
+}
+
 async function refreshNodes(){
   try{
     var nodes=await(await fetch('/mesh/nodes')).json();
@@ -497,6 +531,7 @@ async function refreshNodes(){
       return '<div class="node-card">'
         +'<div class="nc-header"><span class="node-status-dot '+statusDotClass(n.status)+'"></span>'
         +'<span class="node-id" title="'+escH(n.node_id||'')+'">&#128187; '+escH(nid)+'</span>'
+	+'<span class="node-alias" title="Rinomina nodo" onclick="renameNode(\''+escAttr(n.node_id||'')+'\',\''+escAttr(n.alias||'')+'\')">'+  (n.alias ? escH(n.alias) : '<span class="node-alias-empty">+ alias</span>')+'</span>'
         +'<span class="tier-badge '+tierClass(tier)+'">'+tier+'</span>'
         +scoreBadge(score)
         +'</div>'
